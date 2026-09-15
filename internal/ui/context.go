@@ -89,21 +89,29 @@ type context struct {
 	presentationSkipped bool
 
 	funcsInFrameCh chan func()
+
+	// clock paces this window's ticks; each window has one, so a pass over several windows counts each
+	// window's frames once (clock.Register keeps it at the package-level TPS).
+	clock *clock.Clock
 }
 
 func newContext(game Game, screenTransparent bool) *context {
-	return &context{
+	c := &context{
 		game:              game,
 		screenTransparent: screenTransparent,
 		funcsInFrameCh:    make(chan func()),
+		clock:             clock.NewClock(clock.Now()),
 	}
+	clock.Register(c.clock)
+	return c
 }
 
 // updateFrame runs one frame. present reports whether the frame should be shown on the screen; when it
-// is false (e.g. the window is hidden) the buffer swap is skipped, so the loop paces from
-// flushCommandsAndWait's no-swap path instead of a present that may block, and Update keeps running at the
-// target tick rate.
-func (c *context) updateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present bool) error {
+// is false (e.g. the window is hidden) the buffer swap is skipped, and Update keeps running at the
+// target tick rate. It reports whether the frame was presented and how long the loop should wait before the
+// next pass to pace this window (the no-swap idle wait, or the vsync pacing when the display is not waited
+// for); the wait is the caller's to take, once for every window of the pass.
+func (c *context) updateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present bool) (presented bool, wait time.Duration, err error) {
 	if !present {
 		c.presentationSkipped = true
 	} else if c.presentationSkipped {
@@ -112,17 +120,18 @@ func (c *context) updateFrame(graphicsDriver graphicsdriver.Graphics, outsideWid
 		c.skipCount = 0
 	}
 	// TODO: If updateCount is 0 and vsync is disabled, swapping buffers can be skipped.
-	needsSwapBuffers, err := c.updateFrameImpl(graphicsDriver, clock.UpdateFrame(), outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, false)
+	needsSwapBuffers, err := c.updateFrameImpl(graphicsDriver, c.clock.UpdateFrame(clock.Now()), outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, false)
 	if err != nil {
-		return err
+		return false, 0, err
 	}
-	if err := c.flushCommandsAndWait(needsSwapBuffers && present, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate()); err != nil {
-		return err
+	wait, err = c.flushCommands(needsSwapBuffers && present, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate())
+	if err != nil {
+		return false, 0, err
 	}
 	if needsSwapBuffers && present {
 		c.presentationSkipped = false
 	}
-	return nil
+	return needsSwapBuffers && present, wait, nil
 }
 
 // forceUpdateFrame runs one frame with a forced draw, regardless of the draw-skipping states.
@@ -138,12 +147,17 @@ func (c *context) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, outsi
 		// Let the clock determine the tick count as usual, instead of forcing one tick per call.
 		// Forced frames can happen at any rate, like once per window-resizing event, and forcing
 		// a tick there would advance the game time faster than the specified TPS (#2615).
-		needsSwapBuffers, err := c.updateFrameImpl(graphicsDriver, clock.UpdateFrame(), outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, true)
+		needsSwapBuffers, err := c.updateFrameImpl(graphicsDriver, c.clock.UpdateFrame(clock.Now()), outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, true)
 		if err != nil {
 			return err
 		}
-		if err := c.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate()); err != nil {
+		// A forced frame is one frame inside the OS's resize loop: it takes its own wait.
+		wait, err := c.flushCommands(needsSwapBuffers, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate())
+		if err != nil {
 			return err
+		}
+		if wait > 0 {
+			time.Sleep(wait)
 		}
 	}
 
@@ -211,7 +225,7 @@ func (c *context) updateFrameImpl(graphicsDriver graphicsdriver.Graphics, update
 		c.updateCalled = true
 		// Reconcile the forced tick with the clock: forcing an Update on every resize step
 		// (#3477) would otherwise advance the game time faster than the target TPS (#2615).
-		clock.SinkTick()
+		c.clock.SinkTick(clock.Now())
 	}
 	debug.FrameLogf("Update count per frame: %d\n", updateCount)
 
@@ -259,9 +273,13 @@ func (c *context) readInputStateForTick(ui *UserInterface) {
 	ui.advanceInputTimeToNextTick()
 }
 
-func (c *context) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, vsyncEnabled bool, refreshRate int) error {
+// flushCommands flushes the frame's commands and works out how long the loop should wait before the next frame
+// of this window: the idle wait when nothing was swapped or the window is occluded, or the pacing that stands
+// in for a vsync the display does not provide. The bookkeeping is the same whether the wait is taken or not; the
+// caller takes it, once per pass over every window.
+func (c *context) flushCommands(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, vsyncEnabled bool, refreshRate int) (time.Duration, error) {
 	if err := atlas.FlushCommands(graphicsDriver, needsSwapBuffers); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Swapping buffers for an invisible screen returns without waiting for the display. Pace such a
@@ -301,14 +319,13 @@ func (c *context) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver gra
 	// Pace with an absolute deadline to avoid drift.
 	if waitTime > 0 {
 		if next := c.lastSwapBufferTime.Add(waitTime); next.After(now) {
-			time.Sleep(next.Sub(now))
 			c.lastSwapBufferTime = next
-			return nil
+			return next.Sub(now), nil
 		}
 	}
 	c.lastSwapBufferTime = now
 
-	return nil
+	return 0, nil
 }
 
 // resetVsyncDetection makes whether swapping buffers waits for the display measured again.

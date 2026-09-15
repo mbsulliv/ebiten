@@ -18,8 +18,10 @@ package ui
 
 import (
 	"fmt"
+	"github.com/hajimehoshi/ebiten/v2/internal/clock"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
 	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
@@ -116,6 +118,13 @@ type userInterfaceImpl struct {
 	desktopWindow desktopWindow
 
 	glfwInitOnce sync.Once
+
+	// windows are the GLFW backend's windows, the primary first (ui_windowstate_desktop.go).
+	windowsMu sync.Mutex
+	windows   []*glfwBackend
+
+	// passNextWake is the deadline of the pass's idle wait (glfwBackend.pacePass), on the game goroutine.
+	passNextWake time.Time
 }
 
 func (u *UserInterface) init() error {
@@ -172,7 +181,17 @@ func (u *UserInterface) setRunningBackend(b uiBackend) {
 	if b == nil {
 		u.setRunning(false)
 		u.backend.Store(nil)
+		u.windowsMu.Lock()
+		u.windows = nil
+		u.windowsMu.Unlock()
+		clock.SetPrimary(nil)
 		return
+	}
+	if g, ok := b.(*glfwBackend); ok {
+		u.addWindow(g)
+		if g.context != nil {
+			clock.SetPrimary(g.context.clock)
+		}
 	}
 	u.backend.Store(&b)
 	u.setRunning(true)
@@ -275,15 +294,28 @@ func (u *UserInterface) SetFullscreen(fullscreen bool) {
 	b.SetFullscreen(fullscreen)
 }
 
+// The settings below are held twice: on the UserInterface as the default for windows created later (and for
+// a backend without windows of its own), and on each GLFW window as its own copy, which is what the
+// package-level API reads and writes while that window is the primary.
+
 func (u *UserInterface) IsRunnableOnUnfocused() bool {
+	if b := u.primaryGLFW(); b != nil {
+		return b.isRunnableOnUnfocused()
+	}
 	return u.isRunnableOnUnfocused()
 }
 
 func (u *UserInterface) SetRunnableOnUnfocused(runnableOnUnfocused bool) {
 	u.setRunnableOnUnfocused(runnableOnUnfocused)
+	if b := u.primaryGLFW(); b != nil {
+		b.setRunnableOnUnfocused(runnableOnUnfocused)
+	}
 }
 
 func (u *UserInterface) FPSMode() FPSModeType {
+	if b := u.primaryGLFW(); b != nil {
+		return b.FPSMode()
+	}
 	return FPSModeType(u.fpsMode.Load())
 }
 
@@ -291,7 +323,15 @@ func (u *UserInterface) SetFPSMode(mode FPSModeType) {
 	if u.isTerminated() {
 		return
 	}
-	if FPSModeType(u.fpsMode.Swap(int32(mode))) == mode {
+	changed := FPSModeType(u.fpsMode.Swap(int32(mode))) != mode
+	if g := u.primaryGLFW(); g != nil {
+		if FPSModeType(g.fpsMode.Swap(int32(mode))) == mode {
+			return
+		}
+		g.applyFPSMode()
+		return
+	}
+	if !changed {
 		return
 	}
 	b := u.runningBackend()
@@ -333,6 +373,9 @@ func (u *UserInterface) SetCursorMode(mode CursorMode) {
 }
 
 func (u *UserInterface) CursorShape() CursorShape {
+	if b := u.primaryGLFW(); b != nil {
+		return b.getCursorShape()
+	}
 	return u.getCursorShape()
 }
 
@@ -340,7 +383,15 @@ func (u *UserInterface) SetCursorShape(shape CursorShape) {
 	if u.isTerminated() {
 		return
 	}
-	if CursorShape(u.cursorShape.Swap(int32(shape))) == shape {
+	changed := CursorShape(u.cursorShape.Swap(int32(shape))) != shape
+	if g := u.primaryGLFW(); g != nil {
+		if CursorShape(g.cursorShape.Swap(int32(shape))) == shape {
+			return
+		}
+		g.applyCursorShape()
+		return
+	}
+	if !changed {
 		return
 	}
 	b := u.runningBackend()
@@ -350,9 +401,14 @@ func (u *UserInterface) SetCursorShape(shape CursorShape) {
 	b.applyCursorShape()
 }
 
+// Window is the primary window's settings while a GLFW window runs, else the settings buffered for the window
+// to come (or for a backend without windows of its own).
 func (u *UserInterface) Window() Window {
 	if microsoftgdk.IsXbox() {
 		return &nullWindow{}
+	}
+	if b := u.primaryGLFW(); b != nil {
+		return &b.desktopWindow
 	}
 	return &u.desktopWindow
 }

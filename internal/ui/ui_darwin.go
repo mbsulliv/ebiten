@@ -123,10 +123,10 @@ func (u *UserInterface) initializePlatform() error {
 			{
 				Cmd: sel_windowWillEnterFullScreen,
 				Fn: func(id objc.ID, cmd objc.SEL, notification objc.ID) {
-					// The window delegate methods are invoked only while a GLFW window exists,
-					// so the running backend is the GLFW backend.
-					b, ok := u.runningBackend().(*glfwBackend)
-					if !ok {
+					// The window delegate methods are invoked only while a GLFW window exists; the
+					// notification names which window.
+					b := u.backendForNSWindow(cocoa.NSNotification{ID: notification}.Object())
+					if b == nil {
 						return
 					}
 					if err := b.captureWindowPosToRestore(); err != nil {
@@ -149,10 +149,10 @@ func (u *UserInterface) initializePlatform() error {
 					// Even a window has a size limitation, a window can be fullscreen by calling SetFullscreen(true).
 					// In this case, the window size limitation is disabled temporarily.
 					// When exiting from fullscreen, reset the window size limitation.
-					// The window delegate methods are invoked only while a GLFW window exists,
-					// so the running backend is the GLFW backend.
-					b, ok := u.runningBackend().(*glfwBackend)
-					if !ok {
+					// The window delegate methods are invoked only while a GLFW window exists; the
+					// notification names which window.
+					b := u.backendForNSWindow(cocoa.NSNotification{ID: notification}.Object())
+					if b == nil {
 						return
 					}
 					if err := b.updateWindowSizeLimits(); err != nil {
@@ -418,6 +418,20 @@ func monitorFromWindowByOS(w *glfw.Window) (*Monitor, error) {
 
 func (u *glfwBackend) nativeWindow() (uintptr, error) {
 	return u.window.GetCocoaWindow()
+}
+
+// backendForNSWindow is the window a delegate notification is about, nil when it is none of ours. Must be
+// called from the main thread.
+func (u *UserInterface) backendForNSWindow(nsWindow objc.ID) *glfwBackend {
+	for _, b := range u.snapshotWindows() {
+		if !b.created.Load() {
+			continue
+		}
+		if w, err := b.window.GetCocoaWindow(); err == nil && w == uintptr(nsWindow) {
+			return b
+		}
+	}
+	return nil
 }
 
 // isWindowOccluded reports whether no part of the window is visible on the screen.

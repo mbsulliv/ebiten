@@ -30,13 +30,13 @@ var _ backendWindow = (*glfwWindow)(nil)
 
 func (w *glfwWindow) IsDecorated() bool {
 	var v bool
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		a, err := w.ui.window.GetAttrib(glfw.Decorated)
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		v = a == glfw.True
@@ -45,12 +45,12 @@ func (w *glfwWindow) IsDecorated() bool {
 }
 
 func (w *glfwWindow) SetDecorated(decorated bool) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowDecorated(decorated); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -58,13 +58,13 @@ func (w *glfwWindow) SetDecorated(decorated bool) {
 
 func (w *glfwWindow) IsVisible() bool {
 	var v bool
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		a, err := w.ui.window.GetAttrib(glfw.Visible)
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		v = a == glfw.True
@@ -73,24 +73,24 @@ func (w *glfwWindow) IsVisible() bool {
 }
 
 func (w *glfwWindow) SetVisible(visible bool) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowVisible(visible); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
 }
 
 func (w *glfwWindow) applyResizingMode() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowResizingMode(WindowResizingMode(w.ui.desktopWindow.windowResizingMode.Load())); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -98,13 +98,13 @@ func (w *glfwWindow) applyResizingMode() {
 
 func (w *glfwWindow) IsFloating() bool {
 	var v bool
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		a, err := w.ui.window.GetAttrib(glfw.Floating)
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		v = a == glfw.True
@@ -113,12 +113,12 @@ func (w *glfwWindow) IsFloating() bool {
 }
 
 func (w *glfwWindow) SetFloating(floating bool) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowFloating(floating); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -126,13 +126,13 @@ func (w *glfwWindow) SetFloating(floating bool) {
 
 func (w *glfwWindow) IsMaximized() bool {
 	var v bool
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		m, err := w.ui.isWindowMaximized()
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		v = m
@@ -141,12 +141,12 @@ func (w *glfwWindow) IsMaximized() bool {
 }
 
 func (w *glfwWindow) Maximize() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.maximizeWindow(); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -154,13 +154,13 @@ func (w *glfwWindow) Maximize() {
 
 func (w *glfwWindow) IsMinimized() bool {
 	var v bool
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		a, err := w.ui.window.GetAttrib(glfw.Iconified)
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		v = a == glfw.True
@@ -169,36 +169,36 @@ func (w *glfwWindow) IsMinimized() bool {
 }
 
 func (w *glfwWindow) Minimize() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.iconifyWindow(); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
 }
 
 func (w *glfwWindow) Restore() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.restoreWindow(); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
 }
 
 func (w *glfwWindow) SetMonitor(monitor *Monitor) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowMonitor(monitor); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -206,8 +206,8 @@ func (w *glfwWindow) SetMonitor(monitor *Monitor) {
 
 func (w *glfwWindow) Position() (int, int) {
 	var x, y int
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		x = w.ui.windowXInDIP
@@ -217,17 +217,17 @@ func (w *glfwWindow) Position() (int, int) {
 }
 
 func (w *glfwWindow) SetPosition(x, y int) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		m, err := w.ui.currentMonitor()
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		if err := w.ui.setWindowPositionInDIP(x, y, m, true); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -235,8 +235,8 @@ func (w *glfwWindow) SetPosition(x, y int) {
 
 func (w *glfwWindow) Size() (int, int) {
 	var ww, wh int
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		ww = w.ui.windowWidthInDIP
@@ -246,44 +246,44 @@ func (w *glfwWindow) Size() (int, int) {
 }
 
 func (w *glfwWindow) SetSize(width, height int) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		m, err := w.ui.isWindowMaximized()
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		if m && runtime.GOOS != "darwin" {
 			return
 		}
 		if err := w.ui.setWindowSizeInDIP(width, height, true); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
 }
 
 func (w *glfwWindow) SetSizeLimits(minw, minh, maxw, maxh int) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.updateWindowSizeLimits(); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
 }
 
 func (w *glfwWindow) applyTitle() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowTitle(w.ui.desktopWindow.title.Load().(string)); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -291,36 +291,36 @@ func (w *glfwWindow) applyTitle() {
 
 func (w *glfwWindow) applyColorMode() {
 	var err error
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
-		err = w.ui.setWindowColorModeImpl(w.ui.PreferredColorMode())
+		err = w.ui.setWindowColorModeImpl(w.ui.ui.PreferredColorMode())
 	})
 	if err != nil {
-		w.ui.setError(err)
+		w.ui.ui.setError(err)
 	}
 }
 
 func (w *glfwWindow) applyClosingHandled() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setDocumentEdited(w.ui.desktopWindow.isWindowClosingHandled()); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
 }
 
 func (w *glfwWindow) SetMousePassthrough(enabled bool) {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.setWindowMousePassthrough(enabled); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})
@@ -328,13 +328,13 @@ func (w *glfwWindow) SetMousePassthrough(enabled bool) {
 
 func (w *glfwWindow) IsMousePassthrough() bool {
 	var v bool
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		a, err := w.ui.window.GetAttrib(glfw.MousePassthrough)
 		if err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 		v = a == glfw.True
@@ -343,12 +343,12 @@ func (w *glfwWindow) IsMousePassthrough() bool {
 }
 
 func (w *glfwWindow) RequestAttention() {
-	w.ui.mainThread.Call(func() {
-		if w.ui.isTerminated() {
+	w.ui.ui.mainThread.Call(func() {
+		if w.ui.ui.isTerminated() {
 			return
 		}
 		if err := w.ui.window.RequestAttention(); err != nil {
-			w.ui.setError(err)
+			w.ui.ui.setError(err)
 			return
 		}
 	})

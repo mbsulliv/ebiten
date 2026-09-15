@@ -196,20 +196,75 @@ func (c *Clock) SinkTick(now int64) {
 
 var theClock = NewClock(now())
 
+// Now is the clock's time source, for a Clock owned elsewhere (a window's).
+func Now() int64 { return now() }
+
+// Several windows each have a clock (internal/ui's context). The package-level TPS applies to all of them,
+// and the readers report the primary window's clock, or the default one while no window has been made primary.
+var (
+	clocksMu sync.Mutex
+	clocks   []*Clock
+	primary  *Clock
+)
+
+// Register adds a window's clock: it takes the current TPS and follows later SetTPS calls.
+func Register(c *Clock) {
+	clocksMu.Lock()
+	defer clocksMu.Unlock()
+	c.SetTPS(theClock.TPS())
+	clocks = append(clocks, c)
+}
+
+// Unregister removes a window's clock.
+func Unregister(c *Clock) {
+	clocksMu.Lock()
+	defer clocksMu.Unlock()
+	for i, x := range clocks {
+		if x == c {
+			clocks = append(clocks[:i], clocks[i+1:]...)
+			break
+		}
+	}
+	if primary == c {
+		primary = nil
+	}
+}
+
+// SetPrimary names the clock the readers report; nil goes back to the default clock.
+func SetPrimary(c *Clock) {
+	clocksMu.Lock()
+	defer clocksMu.Unlock()
+	primary = c
+}
+
+func reader() *Clock {
+	clocksMu.Lock()
+	defer clocksMu.Unlock()
+	if primary != nil {
+		return primary
+	}
+	return theClock
+}
+
 func ActualFPS() float64 {
-	return theClock.ActualFPS()
+	return reader().ActualFPS()
 }
 
 func ActualTPS() float64 {
-	return theClock.ActualTPS()
+	return reader().ActualTPS()
 }
 
 func SetTPS(tps int) {
 	theClock.SetTPS(tps)
+	clocksMu.Lock()
+	defer clocksMu.Unlock()
+	for _, c := range clocks {
+		c.SetTPS(tps)
+	}
 }
 
 func TPS() int {
-	return theClock.TPS()
+	return reader().TPS()
 }
 
 // UpdateFrame updates the inner clock state and returns an integer value

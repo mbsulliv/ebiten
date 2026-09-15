@@ -298,7 +298,7 @@ func (u *glfwBackend) updateInputStateForFrame(deviceScaleFactor float64) error 
 		cx2 = dipToGLFWPixel(cx2, s)
 		cy2 = dipToGLFWPixel(cy2, s)
 		var err error
-		u.mainThread.Call(func() {
+		u.ui.mainThread.Call(func() {
 			err = u.window.SetCursorPos(cx2, cy2)
 		})
 		if err != nil {
@@ -328,13 +328,13 @@ func (u *glfwBackend) KeyName(key Key) string {
 	}
 
 	var name string
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		n, err := glfw.GetKeyName(gk, 0)
 		if err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		name = n

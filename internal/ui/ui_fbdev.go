@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -183,7 +184,15 @@ func (b *fbdevBackend) updateGame() error {
 
 	w, h := b.outsideSize()
 	sw, sh := b.screenSize()
-	return b.context.updateFrame(b.graphicsDriver, w, h, sw, sh, b.deviceScaleFactor(), b.UserInterface, true)
+	// one window, one loop: the frame's wait is taken here
+	_, wait, err := b.context.updateFrame(b.graphicsDriver, w, h, sw, sh, b.deviceScaleFactor(), b.UserInterface, true)
+	if err != nil {
+		return err
+	}
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+	return nil
 }
 
 // deviceScaleFactor implements virtualMonitorSource.

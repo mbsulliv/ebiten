@@ -180,7 +180,7 @@ func (u *UserInterface) readPixels(img *Image, pixels []byte, region image.Recta
 		// this might be possible (#1704).
 
 		var err error
-		u.context.runInFrame(func() {
+		u.currentContext().runInFrame(func() {
 			ok, imgErr := img.readPixels(pixels, region)
 			if imgErr != nil {
 				err = imgErr
@@ -256,12 +256,33 @@ func (u *UserInterface) setError(err error) {
 	}
 }
 
+// windowState is the per-window part of the game state: the tick and input-time counters, the refresh rate of
+// the display the window is on, the screen-clearing and FPS settings. A platform whose backend owns windows
+// (the desktop's GLFW backend) answers these for the primary window; elsewhere the UserInterface's own fields
+// serve, as they always have.
+type windowState interface {
+	Tick() int64
+	incrementTick()
+	advanceInputTimeToNextTick()
+	InputTime() InputTime
+	RefreshRate() int
+	setRefreshRate(refreshRate int)
+	IsScreenClearedEveryFrame() bool
+	SetScreenClearedEveryFrame(cleared bool)
+}
+
 func (u *UserInterface) IsScreenClearedEveryFrame() bool {
+	if w := u.windowState(); w != nil {
+		return w.IsScreenClearedEveryFrame()
+	}
 	return u.isScreenClearedEveryFrame.Load()
 }
 
 func (u *UserInterface) SetScreenClearedEveryFrame(cleared bool) {
-	u.isScreenClearedEveryFrame.Store(cleared)
+	u.isScreenClearedEveryFrame.Store(cleared) // the default for windows created later
+	if w := u.windowState(); w != nil {
+		w.SetScreenClearedEveryFrame(cleared)
+	}
 }
 
 func (u *UserInterface) setGraphicsLibrary(library GraphicsLibrary) {
@@ -273,12 +294,19 @@ func (u *UserInterface) GraphicsLibrary() GraphicsLibrary {
 }
 
 func (u *UserInterface) setRefreshRate(refreshRate int) {
+	if w := u.windowState(); w != nil {
+		w.setRefreshRate(refreshRate)
+		return
+	}
 	u.refreshRate.Store(int32(refreshRate))
 }
 
 // RefreshRate returns the refresh rate, in Hz, of the display the game is presented on.
 // It returns 0 when the rate is unknown.
 func (u *UserInterface) RefreshRate() int {
+	if w := u.windowState(); w != nil {
+		return w.RefreshRate()
+	}
 	return int(u.refreshRate.Load())
 }
 
@@ -307,10 +335,17 @@ func (u *UserInterface) setTerminated() {
 }
 
 func (u *UserInterface) Tick() int64 {
+	if w := u.windowState(); w != nil {
+		return w.Tick()
+	}
 	return u.tick.Load()
 }
 
 func (u *UserInterface) incrementTick() {
+	if w := u.windowState(); w != nil {
+		w.incrementTick()
+		return
+	}
 	u.tick.Add(1)
 }
 
@@ -320,10 +355,17 @@ func (u *UserInterface) incrementTick() {
 // middle of a tick, as a main-thread operation like resizing the window pumps the event queue there,
 // and the next tick is the first one that can report its edge.
 func (u *UserInterface) advanceInputTimeToNextTick() {
+	if w := u.windowState(); w != nil {
+		w.advanceInputTimeToNextTick()
+		return
+	}
 	u.inputTime.Store(int64(NewInputTimeFromTick(u.tick.Load() + 1)))
 }
 
 func (u *UserInterface) InputTime() InputTime {
+	if w := u.windowState(); w != nil {
+		return w.InputTime()
+	}
 	t := InputTime(u.inputTime.Add(1))
 	if t.Subtick() == 0 {
 		panic("ui: too many input events in a tick")

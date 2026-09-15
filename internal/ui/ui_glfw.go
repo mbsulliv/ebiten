@@ -24,6 +24,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -55,9 +56,29 @@ func driverCursorModeToGLFWCursorMode(mode CursorMode) int {
 }
 
 type glfwBackend struct {
-	*UserInterface
+	ui *UserInterface
 
 	window *glfw.Window
+
+	// created is set once window exists (createWindow); the window's settings are buffered until then.
+	created atomic.Bool
+
+	// The window's own game context and settings (formerly on UserInterface, one per process): the context
+	// runs this window's game; desktopWindow holds its title, size, position and the other window settings;
+	// the counters and the settings below start from the UserInterface's defaults at creation.
+	context       *context
+	desktopWindow desktopWindow
+
+	tick                      atomic.Int64
+	inputTime                 atomic.Int64
+	refreshRate               atomic.Int32
+	isScreenClearedEveryFrame atomic.Bool
+	runnableOnUnfocused       atomic.Bool
+	fpsMode                   atomic.Int32
+	cursorShape               atomic.Int32
+	initMonitor               atomic.Pointer[Monitor]
+	initFullscreen            atomic.Bool
+	initCursorMode            atomic.Int32
 
 	lastDeviceScaleFactor float64
 
@@ -109,10 +130,11 @@ type glfwBackend struct {
 
 	fpsModeInited bool
 
+	// skipFrame is set by update when the window is unfocused and not runnable then: the step draws nothing.
+	skipFrame bool
+
 	input         glfwInput
 	backendWindow glfwWindow
-
-	unfocusedNextWake time.Time
 
 	closeCallback                  glfw.CloseCallback
 	posCallback                    glfw.PosCallback
@@ -153,14 +175,55 @@ func maybeNewGLFWBackend(u *UserInterface) *glfwBackend {
 
 func newGLFWBackend(u *UserInterface) *glfwBackend {
 	b := &glfwBackend{
-		UserInterface: u,
+		ui: u,
 	}
 	b.windowToRestore.pos = image.Pt(invalidPos, invalidPos)
 	b.windowToRestore.size = image.Pt(invalidSize, invalidSize)
 	b.input.clearSavedCursorPos()
 	b.backendWindow.ui = b
+	// the window starts from the settings made before it existed
+	u.desktopWindow.cloneInto(&b.desktopWindow, b)
+	b.isScreenClearedEveryFrame.Store(u.isScreenClearedEveryFrame.Load())
+	b.runnableOnUnfocused.Store(u.runnableOnUnfocused.Load())
+	b.fpsMode.Store(u.fpsMode.Load())
+	b.cursorShape.Store(u.cursorShape.Load())
+	b.initMonitor.Store(u.initMonitor.Load())
+	b.initFullscreen.Store(u.initFullscreen.Load())
+	b.initCursorMode.Store(u.initCursorMode.Load())
 	return b
 }
+
+// The window's counters and settings (see windowState in ui.go).
+
+func (u *glfwBackend) Tick() int64    { return u.tick.Load() }
+func (u *glfwBackend) incrementTick() { u.tick.Add(1) }
+
+func (u *glfwBackend) advanceInputTimeToNextTick() {
+	u.inputTime.Store(int64(NewInputTimeFromTick(u.tick.Load() + 1)))
+}
+
+func (u *glfwBackend) InputTime() InputTime {
+	t := InputTime(u.inputTime.Add(1))
+	if t.Subtick() == 0 {
+		panic("ui: too many input events in a tick")
+	}
+	return t
+}
+
+func (u *glfwBackend) RefreshRate() int                  { return int(u.refreshRate.Load()) }
+func (u *glfwBackend) setRefreshRate(refreshRate int)    { u.refreshRate.Store(int32(refreshRate)) }
+func (u *glfwBackend) IsScreenClearedEveryFrame() bool   { return u.isScreenClearedEveryFrame.Load() }
+func (u *glfwBackend) SetScreenClearedEveryFrame(c bool) { u.isScreenClearedEveryFrame.Store(c) }
+func (u *glfwBackend) FPSMode() FPSModeType              { return FPSModeType(u.fpsMode.Load()) }
+func (u *glfwBackend) getCursorShape() CursorShape       { return CursorShape(u.cursorShape.Load()) }
+func (u *glfwBackend) isRunnableOnUnfocused() bool       { return u.runnableOnUnfocused.Load() }
+func (u *glfwBackend) setRunnableOnUnfocused(r bool)     { u.runnableOnUnfocused.Store(r) }
+func (u *glfwBackend) getInitMonitor() *Monitor          { return u.initMonitor.Load() }
+func (u *glfwBackend) setInitMonitor(m *Monitor)         { u.initMonitor.Store(m) }
+func (u *glfwBackend) isInitFullscreen() bool            { return u.initFullscreen.Load() }
+func (u *glfwBackend) setInitFullscreen(f bool)          { u.initFullscreen.Store(f) }
+func (u *glfwBackend) getInitCursorMode() CursorMode     { return CursorMode(u.initCursorMode.Load()) }
+func (u *glfwBackend) setInitCursorMode(m CursorMode)    { u.initCursorMode.Store(int32(m)) }
 
 var glfwSystemCursors = map[CursorShape]*glfw.Cursor{}
 
@@ -276,13 +339,13 @@ func (u *UserInterface) ensureGLFWInit() error {
 // Monitor returns the window's current monitor.
 func (u *glfwBackend) Monitor() *Monitor {
 	var monitor *Monitor
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		m, err := u.currentMonitor()
 		if err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		monitor = m
@@ -370,7 +433,7 @@ func (u *glfwBackend) isWindowedFullscreen() (bool, error) {
 //
 // isFullscreen must be called from the main thread.
 func (u *glfwBackend) isFullscreen() (bool, error) {
-	if !u.isRunning() {
+	if !u.ui.isRunning() {
 		panic("ui: isFullscreen can't be called before the main loop starts")
 	}
 	wf, err := u.isWindowedFullscreen()
@@ -386,13 +449,13 @@ func (u *glfwBackend) isFullscreen() (bool, error) {
 
 func (u *glfwBackend) IsFullscreen() bool {
 	var fullscreen bool
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		b, err := u.isFullscreen()
 		if err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		fullscreen = b
@@ -401,20 +464,20 @@ func (u *glfwBackend) IsFullscreen() bool {
 }
 
 func (u *glfwBackend) SetFullscreen(fullscreen bool) {
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		f, err := u.isFullscreen()
 		if err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		if f == fullscreen {
 			return
 		}
 		if err := u.setFullscreen(fullscreen); err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 	})
@@ -422,13 +485,13 @@ func (u *glfwBackend) SetFullscreen(fullscreen bool) {
 
 func (u *glfwBackend) IsFocused() bool {
 	var focused bool
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		a, err := u.window.GetAttrib(glfw.Focused)
 		if err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		focused = a == glfw.True
@@ -437,12 +500,12 @@ func (u *glfwBackend) IsFocused() bool {
 }
 
 func (u *glfwBackend) applyFPSMode() {
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		if err := u.setFPSMode(FPSModeType(u.fpsMode.Load())); err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 	})
@@ -452,27 +515,27 @@ func (u *glfwBackend) ScheduleFrame() {
 	// This check can slip past a termination running on the main thread, and then
 	// PostEmptyEvent touches GLFW's state after glfw.Terminate. PostEmptyEvent must stay
 	// harmless in that case.
-	if u.isTerminated() {
+	if u.ui.isTerminated() {
 		return
 	}
 
 	// As the main thread can be blocked, do not check the current FPS mode.
 	// PostEmptyEvent is concurrent safe.
 	if err := glfw.PostEmptyEvent(); err != nil {
-		u.setError(err)
+		u.ui.setError(err)
 		return
 	}
 }
 
 func (u *glfwBackend) CursorMode() CursorMode {
 	var v CursorMode
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		mode, err := u.window.GetInputMode(glfw.CursorMode)
 		if err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		switch mode {
@@ -490,17 +553,17 @@ func (u *glfwBackend) CursorMode() CursorMode {
 }
 
 func (u *glfwBackend) SetCursorMode(mode CursorMode) {
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		if err := u.window.SetInputMode(glfw.CursorMode, driverCursorModeToGLFWCursorMode(mode)); err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 		if mode == CursorModeVisible {
 			if err := u.window.SetCursor(glfwSystemCursors[u.getCursorShape()]); err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 		}
@@ -508,12 +571,12 @@ func (u *glfwBackend) SetCursorMode(mode CursorMode) {
 }
 
 func (u *glfwBackend) applyCursorShape() {
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		if err := u.window.SetCursor(glfwSystemCursors[u.getCursorShape()]); err != nil {
-			u.setError(err)
+			u.ui.setError(err)
 			return
 		}
 	})
@@ -536,8 +599,9 @@ func (u *glfwBackend) createWindow() error {
 		return err
 	}
 	u.window = window
+	u.created.Store(true)
 	// Publish the backend and set the running state true just as a window is set (#2742).
-	u.setRunningBackend(u)
+	u.ui.setRunningBackend(u)
 
 	// The position must be set before the size is set (#1982).
 	// setWindowSizeInDIP refers the current monitor's device scale.
@@ -610,11 +674,11 @@ func (u *glfwBackend) registerWindowCloseCallback() error {
 				return
 			}
 			if err := u.window.Focus(); err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			if err := u.window.SetShouldClose(false); err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 		}
@@ -631,7 +695,7 @@ func (u *glfwBackend) registerWindowPosCallback() error {
 		u.posCallback = func(_ *glfw.Window, x, y int) {
 			f, err := u.isFullscreen()
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			if f {
@@ -639,7 +703,7 @@ func (u *glfwBackend) registerWindowPosCallback() error {
 			}
 			a, err := u.window.GetAttrib(glfw.Iconified)
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			if a == glfw.True {
@@ -648,12 +712,12 @@ func (u *glfwBackend) registerWindowPosCallback() error {
 
 			m, err := u.currentMonitor()
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			nx, ny := windowPositionInDIP(x, y, u.windowXInDIP, u.windowYInDIP, m)
 			if err := u.setWindowPositionInDIP(nx, ny, m, false); err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 		}
@@ -673,7 +737,7 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 		u.defaultFramebufferSizeCallback = func(_ *glfw.Window, w, h int) {
 			f, err := u.isFullscreen()
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			if f {
@@ -681,7 +745,7 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 			}
 			a, err := u.window.GetAttrib(glfw.Iconified)
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			if a == glfw.True {
@@ -691,19 +755,19 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 			// w and h are the framebuffer size, not the window size.
 			gw, gh, err := u.window.GetSize()
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			m, err := u.currentMonitor()
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			s := m.DeviceScaleFactor()
 			ww := int(math.Round(dipFromGLFWPixel(float64(gw), s)))
 			wh := int(math.Round(dipFromGLFWPixel(float64(gh), s)))
 			if err := u.setWindowSizeInDIP(ww, wh, false); err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 
@@ -752,7 +816,7 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(outsideWidth, outsideHeig
 	}
 
 	// In the single-thread mode, the game loop runs on the main thread and cannot be resumed here.
-	mainThread, ok := u.mainThread.(interface {
+	mainThread, ok := u.ui.mainThread.(interface {
 		NestedLoop(ctx stdcontext.Context) error
 	})
 	if !ok {
@@ -771,11 +835,11 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(outsideWidth, outsideHeig
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	go func() {
 		defer cancel()
-		err = u.context.forceUpdateFrame(u.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.UserInterface)
+		err = u.context.forceUpdateFrame(u.ui.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.ui)
 	}()
 	_ = mainThread.NestedLoop(ctx)
 	if err != nil {
-		u.setError(err)
+		u.ui.setError(err)
 	}
 }
 
@@ -784,7 +848,7 @@ func (u *glfwBackend) registerDropCallback() error {
 		u.dropCallback = func(_ *glfw.Window, names []string) {
 			fs, err := file.NewVirtualFS(names)
 			if err != nil {
-				u.setError(err)
+				u.ui.setError(err)
 				return
 			}
 			u.input.setDroppedFiles(fs)
@@ -853,8 +917,13 @@ event:
 }
 
 func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
-	if err := u.ensureGLFWInit(); err != nil {
+	if err := u.ui.ensureGLFWInit(); err != nil {
 		return err
+	}
+	// GLFW's initialization records the initial monitor on the UserInterface; a window made before that
+	// copied nothing, so take the default now.
+	if u.initMonitor.Load() == nil {
+		u.initMonitor.Store(u.ui.getInitMonitor())
 	}
 
 	// Center the window on the monitor if the position was not explicitly set.
@@ -863,7 +932,7 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 		if m != nil {
 			sw, sh := m.sizeInDIP()
 			x, y := InitialWindowPosition(int(sw), int(sh), options.InitWindowWidthInDIP, options.InitWindowHeightInDIP)
-			u.UserInterface.Window().SetPosition(x, y)
+			u.desktopWindow.SetPosition(x, y)
 		}
 	}
 
@@ -912,9 +981,9 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 	if err != nil {
 		return err
 	}
-	u.graphicsDriver = g
-	u.setGraphicsLibrary(lib)
-	u.graphicsDriver.SetTransparent(options.ScreenTransparent)
+	u.ui.graphicsDriver = g
+	u.ui.setGraphicsLibrary(lib)
+	u.ui.graphicsDriver.SetTransparent(options.ScreenTransparent)
 
 	// The OpenGL driver needs a window with a GL context, unlike the other drivers.
 	// Set the context-related hints before creating a window.
@@ -978,7 +1047,7 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 
 	// createWindow has published the backend. A concurrent SetPreferredColorMode thus either
 	// applies the color mode by itself, or stores a value that is read here.
-	if m := u.PreferredColorMode(); m != colormode.Unknown {
+	if m := u.ui.PreferredColorMode(); m != colormode.Unknown {
 		if err := u.setWindowColorModeImpl(m); err != nil {
 			return err
 		}
@@ -1000,7 +1069,7 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 		_ = u.skipTaskbar()
 	}
 
-	switch g := u.graphicsDriver.(type) {
+	switch g := u.ui.graphicsDriver.(type) {
 	case interface{ SetPresenter(opengl.Presenter) }:
 		g.SetPresenter(u.window)
 	case interface{ SetWindow(uintptr) }:
@@ -1011,8 +1080,13 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 		g.SetWindow(w)
 	}
 
-	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
-		g.SetMainThreadRunner(u.mainThread.Call)
+	if g, ok := u.ui.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
+		// The driver calls the main thread from the render thread (the Metal presentation-state toggle) at
+		// times when the main thread may be parked in WaitEvents; an empty event wakes it to serve the call.
+		g.SetMainThreadRunner(func(f func()) {
+			_ = glfw.PostEmptyEvent()
+			u.ui.mainThread.Call(f)
+		})
 	}
 
 	// Register callbacks after the window initialization done.
@@ -1143,7 +1217,7 @@ func (u *glfwBackend) setFPSMode(fpsMode FPSModeType) error {
 
 // update must be called from the main thread.
 func (u *glfwBackend) update() (outsideWidth, outsideHeight float64, screenWidth, screenHeight int, err error) {
-	if err := u.error(); err != nil {
+	if err := u.ui.error(); err != nil {
 		return 0, 0, 0, 0, err
 	}
 
@@ -1242,60 +1316,34 @@ func (u *glfwBackend) update() (outsideWidth, outsideHeight float64, screenWidth
 		}
 	}
 
-	if FPSModeType(u.fpsMode.Load()) != FPSModeVsyncOffMinimum {
-		// TODO: Updating the input can be skipped when clock.Update returns 0 (#1367).
-		u.pollingEvents = true
-		err := glfw.PollEvents()
-		u.pollingEvents = false
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-	} else {
-		u.pollingEvents = true
-		err := glfw.WaitEvents()
-		u.pollingEvents = false
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-	}
+	// The event pump ran once for the pass, for every window (pumpEvents); what follows is this window's own.
 	u.syncModKeysFromOS()
 	u.syncLockKeysFromOS()
 
-	// If isRunnableOnUnfocused is false and the window is not focused, wait here.
-	// For the first update, skip this check as the window might not be seen yet in some environments like ChromeOS (#3091).
-	for !u.isRunnableOnUnfocused() && u.bufferOnceSwapped {
+	// A window that is not runnable while unfocused skips its frames while it is unfocused: the pass keeps
+	// pumping events and pacing, so the window never spins and never blocks the others. For the first update,
+	// skip this check as the window might not be seen yet in some environments like ChromeOS (#3091).
+	u.skipFrame = false
+	if !u.isRunnableOnUnfocused() && u.bufferOnceSwapped {
 		// In the initial state on macOS, the window is not shown (#2620).
 		visible, err := u.window.GetAttrib(glfw.Visible)
 		if err != nil {
 			return 0, 0, 0, 0, err
 		}
-		if visible == glfw.False {
-			break
-		}
-
 		focused, err := u.window.GetAttrib(glfw.Focused)
 		if err != nil {
 			return 0, 0, 0, 0, err
 		}
-		if focused != glfw.False {
-			break
-		}
-
 		shouldClose, err := u.window.ShouldClose()
 		if err != nil {
 			return 0, 0, 0, 0, err
 		}
-		if shouldClose {
-			break
-		}
-
-		if err := hook.SuspendAudio(); err != nil {
-			return 0, 0, 0, 0, err
-		}
-		// Wait for an arbitrary period to avoid busy loop.
-		time.Sleep(time.Second / 60)
-		if err := glfw.PollEvents(); err != nil {
-			return 0, 0, 0, 0, err
+		if visible != glfw.False && focused == glfw.False && !shouldClose {
+			if err := hook.SuspendAudio(); err != nil {
+				return 0, 0, 0, 0, err
+			}
+			u.skipFrame = true
+			return 0, 0, 0, 0, nil
 		}
 	}
 
@@ -1309,24 +1357,102 @@ func (u *glfwBackend) update() (outsideWidth, outsideHeight float64, screenWidth
 func (u *glfwBackend) loopGame() (err error) {
 	defer func() {
 		graphicscommand.Terminate()
-		u.mainThread.Call(func() {
+		u.ui.mainThread.Call(func() {
 			// Mark the termination before terminating GLFW so that a concurrent-safe API
 			// like ScheduleFrame stops touching GLFW's state before it is destroyed.
-			u.setTerminated()
+			u.ui.setTerminated()
 			if glfwErr := glfw.Terminate(); glfwErr != nil {
 				err = errors.Join(err, glfwErr)
 			}
 		})
 	}()
 
+	// One pass: the event pump once, for every window, then one step per window in turn, then one wait for
+	// the pass. Frames are never concurrent (the atlas needs that), and the main thread is shared: a window
+	// being live-resized holds the pump, and so the others, for the drag.
 	for {
-		if err := u.updateGame(); err != nil {
+		windows := u.ui.snapshotWindows()
+		if len(windows) == 0 {
+			return RegularTermination
+		}
+		if err := u.pumpEvents(windows); err != nil {
 			return err
 		}
+		var anyPresented, anyFocused bool
+		var wait time.Duration
+		for _, w := range windows {
+			r, err := w.stepFrame()
+			if errors.Is(err, RegularTermination) {
+				// The window is done. Its teardown (the GLFW window, the view) is the closing work of the
+				// next layer; until then a window that closes ends the loop, as it always has.
+				u.ui.removeWindow(w)
+				return err
+			}
+			if err != nil {
+				return err
+			}
+			anyPresented = anyPresented || r.presented
+			anyFocused = anyFocused || r.focused
+			wait = max(wait, r.wait)
+		}
+		u.pacePass(anyPresented, anyFocused, wait)
 	}
 }
 
-// shouldPresentFrame reports whether a frame should be presented to the window.
+// pumpEvents runs the event pump on the main thread, once for the pass: waiting for an event in the minimum
+// FPS mode, polling otherwise. Every window is marked as polling for the duration so a live resize of any of
+// them can force its frame from the callback.
+func (u *glfwBackend) pumpEvents(windows []*glfwBackend) error {
+	var err error
+	u.ui.mainThread.Call(func() {
+		for _, w := range windows {
+			w.pollingEvents = true
+		}
+		defer func() {
+			for _, w := range windows {
+				w.pollingEvents = false
+			}
+		}()
+		if u.ui.FPSMode() != FPSModeVsyncOffMinimum {
+			// TODO: Updating the input can be skipped when clock.Update returns 0 (#1367).
+			err = glfw.PollEvents()
+		} else {
+			err = glfw.WaitEvents()
+		}
+	})
+	return err
+}
+
+// pacePass takes the pass's one wait. In the minimum FPS mode the pump blocks for the next event, so nothing
+// is taken here: a wake serves the windows and goes straight back to waiting. In the polling modes the pass
+// sleeps for the longest wait a presenting window asked for, and for the idle sixtieth of a second when no
+// window presented or none is focused, on an absolute deadline so the pacing does not drift.
+func (u *glfwBackend) pacePass(anyPresented, anyFocused bool, wait time.Duration) {
+	if u.ui.FPSMode() == FPSModeVsyncOffMinimum {
+		return
+	}
+	now := time.Now()
+	if !anyPresented || !anyFocused {
+		const idle = time.Second / 60
+		if next := u.ui.passNextWake.Add(idle); next.After(now) {
+			u.ui.passNextWake = next
+			wait = max(wait, next.Sub(now))
+		} else {
+			u.ui.passNextWake = now
+		}
+	}
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+// stepResult is what one window's step tells the pass.
+type stepResult struct {
+	presented bool          // a frame reached the window
+	focused   bool          // the window had the focus
+	wait      time.Duration // how long this window wants the loop to wait before its next frame
+}
+
 func shouldPresentFrame(windowOnScreen, bufferOnceSwapped, initWindowVisible bool) bool {
 	if windowOnScreen {
 		return true
@@ -1345,7 +1471,7 @@ func shouldPresentFrame(windowOnScreen, bufferOnceSwapped, initWindowVisible boo
 	return false
 }
 
-func (u *glfwBackend) updateGame() error {
+func (u *glfwBackend) stepFrame() (stepResult, error) {
 	var unfocused bool
 	var present bool
 	var monitorChanged bool
@@ -1354,7 +1480,7 @@ func (u *glfwBackend) updateGame() error {
 	var screenWidth, screenHeight int
 	var deviceScaleFactor float64
 	var err error
-	if u.mainThread.Call(func() {
+	if u.ui.mainThread.Call(func() {
 		// On Windows, the focusing state might be always false (#987).
 		// On Windows, even if a window is in another workspace, vsync seems to work.
 		// Then let's assume the window is always 'focused' as a workaround.
@@ -1381,6 +1507,9 @@ func (u *glfwBackend) updateGame() error {
 
 		outsideWidth, outsideHeight, screenWidth, screenHeight, err = u.update()
 		if err != nil {
+			return
+		}
+		if u.skipFrame {
 			return
 		}
 		var m *Monitor
@@ -1410,7 +1539,11 @@ func (u *glfwBackend) updateGame() error {
 			return
 		}
 	}); err != nil {
-		return err
+		return stepResult{}, err
+	}
+	if u.skipFrame {
+		// unfocused and not runnable then: no frame, and the pass's idle wait paces the polling
+		return stepResult{focused: false, wait: time.Second / 60}, nil
 	}
 
 	// Whether swapping buffers waits for the display can differ per monitor, e.g. when the monitors
@@ -1419,30 +1552,20 @@ func (u *glfwBackend) updateGame() error {
 		u.context.resetVsyncDetection()
 	}
 
-	if err := u.context.updateFrame(u.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.UserInterface, present); err != nil {
-		return err
+	presented, wait, err := u.context.updateFrame(u.ui.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.ui, present)
+	if err != nil {
+		return stepResult{}, err
 	}
 
 	u.bufferOnceSwappedOnce.Do(func() {
-		u.mainThread.Call(func() {
+		u.ui.mainThread.Call(func() {
 			u.bufferOnceSwapped = true
 		})
 	})
 
-	// When a window is not focused or in another space, SwapBuffers might return immediately and CPU might be busy.
-	// Mitigate this by sleeping (#982, #2521).
-	if unfocused {
-		const wait = time.Second / 60
-		now := time.Now()
-		if next := u.unfocusedNextWake.Add(wait); next.After(now) {
-			u.unfocusedNextWake = next
-			time.Sleep(time.Until(next))
-		} else {
-			u.unfocusedNextWake = now
-		}
-	}
-
-	return nil
+	// When a window is not focused or in another space, SwapBuffers might return immediately and CPU might be
+	// busy (#982, #2521); the pass's idle wait covers that when no window is focused.
+	return stepResult{presented: presented, focused: !unfocused, wait: wait}, nil
 }
 
 func (u *glfwBackend) updateIconIfNeeded() error {
@@ -1474,13 +1597,13 @@ func (u *glfwBackend) updateIconIfNeeded() error {
 	}
 
 	// Catch a possible error at 'At' (#2647).
-	if err := u.error(); err != nil {
+	if err := u.ui.error(); err != nil {
 		return err
 	}
 
 	var err error
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
+	u.ui.mainThread.Call(func() {
+		if u.ui.isTerminated() {
 			return
 		}
 		// In the fullscreen mode, SetIcon fails (#1578).
@@ -2170,7 +2293,7 @@ func IsScreenTransparentAvailable() bool {
 }
 
 func (u *glfwBackend) RunOnMainThread(f func()) {
-	u.mainThread.Call(f)
+	u.ui.mainThread.Call(f)
 }
 
 func (u *glfwBackend) run(game Game, options *RunOptions) error {
@@ -2181,7 +2304,7 @@ func (u *glfwBackend) run(game Game, options *RunOptions) error {
 }
 
 func (u *glfwBackend) runMultiThread(game Game, options *RunOptions) error {
-	u.mainThread = thread.NewOSThread()
+	u.ui.mainThread = thread.NewOSThread()
 	graphicscommand.SetOSThreadAsRenderThread()
 
 	u.context = newContext(game, options.ScreenTransparent)
@@ -2204,7 +2327,7 @@ func (u *glfwBackend) runMultiThread(game Game, options *RunOptions) error {
 		defer cancel()
 
 		var err error
-		u.mainThread.Call(func() {
+		u.ui.mainThread.Call(func() {
 			if mainErr := u.initOnMainThread(options); mainErr != nil {
 				err = mainErr
 			}
@@ -2214,23 +2337,23 @@ func (u *glfwBackend) runMultiThread(game Game, options *RunOptions) error {
 		}
 
 		// The backend is published at the window creation in initOnMainThread.
-		defer u.setRunningBackend(nil)
+		defer u.ui.setRunningBackend(nil)
 
 		return u.loopGame()
 	})
 
 	// Run the main thread. The loop is the thread's whole life, so a call arriving after
 	// it ends is a no-op rather than a block forever.
-	_ = u.mainThread.LoopAndStop(ctx)
+	_ = u.ui.mainThread.LoopAndStop(ctx)
 	return wg.Wait()
 }
 
 func (u *glfwBackend) runSingleThread(game Game, options *RunOptions) error {
 	// Initialize the main thread first so the thread is available at u.run (#809).
-	u.mainThread = thread.NewNoopThread()
+	u.ui.mainThread = thread.NewNoopThread()
 
 	// The backend is published at the window creation in initOnMainThread.
-	defer u.setRunningBackend(nil)
+	defer u.ui.setRunningBackend(nil)
 
 	u.context = newContext(game, options.ScreenTransparent)
 

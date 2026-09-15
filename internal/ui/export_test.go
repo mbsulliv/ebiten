@@ -77,5 +77,11 @@ func VsyncIgnoredForTest(frameTimes []time.Duration, refreshInterval time.Durati
 
 func FlushCommandsAndWaitForTesting(driver graphicsdriver.Graphics, present bool) error {
 	var c context
-	return c.flushCommandsAndWait(present, driver, false, 60)
+	wait, err := c.flushCommands(present, driver, false, 60)
+	if err != nil {
+		return err
+	}
+	// the wait is the loop's to take, once per pass; here it is taken at once, as the loop did
+	time.Sleep(wait)
+	return nil
 }

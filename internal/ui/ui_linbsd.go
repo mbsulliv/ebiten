@@ -106,7 +106,7 @@ func isGLXExtensionForGL2Available() bool {
 // setOpenGLWindowHints must be called from the main thread.
 func (u *glfwBackend) setOpenGLWindowHints() error {
 	var isES bool
-	if g, ok := u.graphicsDriver.(interface{ IsES() bool }); ok {
+	if g, ok := u.ui.graphicsDriver.(interface{ IsES() bool }); ok {
 		isES = g.IsES()
 	}
 
