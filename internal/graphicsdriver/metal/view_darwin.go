@@ -37,6 +37,14 @@ const maximumDrawableCount = 3
 type view struct {
 	window uintptr
 
+	// screenDrawable is the drawable of the frame being drawn into this view's layer, taken at the first draw
+	// to the screen and presented (or dropped) when the frame's command buffer is flushed.
+	screenDrawable ca.MetalDrawable
+
+	// closing is set when the view is being released: the display link delegate stops delivering drawables
+	// and updateMetalDisplayLink takes its destroy branch.
+	closing atomic.Bool
+
 	// uiview is the UIView the game is rendered into.
 	// This is written on the UI thread and read on the rendering thread.
 	// This is always 0 on macOS.
@@ -102,6 +110,7 @@ type view struct {
 	drawableTimer            *time.Timer
 	drawableFromDisplayLink  bool
 	metalDisplayLinkRunLoop  cocoa.NSRunLoop
+	metalDisplayLinkPort     cocoa.NSMachPort
 	metalDisplayLinkDelegate objc.ID
 
 	// The following members are used only with CADisplayLink.

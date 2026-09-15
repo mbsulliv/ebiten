@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"runtime"
 	"structs"
+	"sync"
 	"time"
 
 	"github.com/ebitengine/purego"
@@ -96,53 +97,117 @@ func isCAMetalDisplayLinkAvailable() bool {
 	return false
 }
 
-var class_EbitengineCAMetalDisplayLinkDelegate objc.Class
+var (
+	class_EbitengineCAMetalDisplayLinkDelegate    objc.Class
+	classEbitengineCAMetalDisplayLinkDelegateOnce sync.Once
+	classEbitengineCAMetalDisplayLinkDelegateErr  error
 
-func (v *view) initCAMetalDisplayLink() error {
-	v.drawableCh = make(chan ca.MetalDrawable)
-	v.drawableDoneCh = make(chan struct{})
-	v.metalDisplayLinkRunLoop = createThreadWithRunLoop()
+	// delegateViews maps a delegate object to its view: the class is registered once for the process and
+	// its one method finds the view of the delegate it was sent to.
+	delegateViewsMu sync.Mutex
+	delegateViews   = map[objc.ID]*view{}
+)
 
-	c, err := objc.RegisterClass(
-		"EbitengineCAMetalDisplayLinkDelegate",
-		objc.GetClass("NSObject"),
-		[]*objc.Protocol{objc.GetProtocol("CAMetalDisplayLinkDelegate")},
-		nil,
-		[]objc.MethodDef{
-			{
-				Cmd: objc.RegisterName("metalDisplayLink:needsUpdate:"),
-				Fn: func(id objc.ID, cmd objc.SEL, metalDisplayLink objc.ID, needsUpdate objc.ID) {
-					// There is a case where this callback is invoked from the main run loop (#3353).
-					// This is very mysterious, but this causes a deadlock.
-					// As a workaround, return this immediately when the current run loop is the main run loop.
-					if cocoa.NSRunLoop_currentRunLoop() == cocoa.NSRunLoop_mainRunLoop() {
-						slog.Debug("metal: metalDisplayLink:needsUpdate: is unexpectedly called from the main run loop")
-						return
-					}
-					// vsyncDisabled or liveResizing becomes true before the display link is invalidated
-					// (see updateMetalDisplayLink).
-					// Return without sending a drawable so that the run loop can execute the invalidation block.
-					if v.vsyncDisabled.Load() || v.liveResizing.Load() {
-						return
-					}
-					drawable := ca.MetalDisplayLinkUpdate{ID: needsUpdate}.Drawable()
-					if drawable == (ca.MetalDrawable{}) {
-						return
-					}
-					v.drawableCh <- drawable
-					<-v.drawableDoneCh
+func rememberDelegateView(d objc.ID, v *view) {
+	delegateViewsMu.Lock()
+	defer delegateViewsMu.Unlock()
+	delegateViews[d] = v
+}
+
+func forgetDelegateView(d objc.ID) {
+	delegateViewsMu.Lock()
+	defer delegateViewsMu.Unlock()
+	delete(delegateViews, d)
+}
+
+func delegateView(d objc.ID) *view {
+	delegateViewsMu.Lock()
+	defer delegateViewsMu.Unlock()
+	return delegateViews[d]
+}
+
+// registerCAMetalDisplayLinkDelegateClass registers the delegate class once for the process.
+func registerCAMetalDisplayLinkDelegateClass() error {
+	classEbitengineCAMetalDisplayLinkDelegateOnce.Do(func() {
+		c, err := objc.RegisterClass(
+			"EbitengineCAMetalDisplayLinkDelegate",
+			objc.GetClass("NSObject"),
+			[]*objc.Protocol{objc.GetProtocol("CAMetalDisplayLinkDelegate")},
+			nil,
+			[]objc.MethodDef{
+				{
+					Cmd: objc.RegisterName("metalDisplayLink:needsUpdate:"),
+					Fn: func(id objc.ID, cmd objc.SEL, metalDisplayLink objc.ID, needsUpdate objc.ID) {
+						// There is a case where this callback is invoked from the main run loop (#3353).
+						// This is very mysterious, but this causes a deadlock.
+						// As a workaround, return this immediately when the current run loop is the main run loop.
+						if cocoa.NSRunLoop_currentRunLoop() == cocoa.NSRunLoop_mainRunLoop() {
+							slog.Debug("metal: metalDisplayLink:needsUpdate: is unexpectedly called from the main run loop")
+							return
+						}
+						v := delegateView(id)
+						if v == nil {
+							return
+						}
+						// vsyncDisabled, liveResizing or closing becomes true before the display link is
+						// invalidated (see updateMetalDisplayLink).
+						// Return without sending a drawable so that the run loop can execute the invalidation block.
+						if v.vsyncDisabled.Load() || v.liveResizing.Load() || v.closing.Load() {
+							return
+						}
+						drawable := ca.MetalDisplayLinkUpdate{ID: needsUpdate}.Drawable()
+						if drawable == (ca.MetalDrawable{}) {
+							return
+						}
+						v.drawableCh <- drawable
+						<-v.drawableDoneCh
+					},
 				},
 			},
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("metal: objc.RegisterClass for EbitengineCAMetalDisplayLinkDelegate failed: %w", err)
+		)
+		if err != nil {
+			classEbitengineCAMetalDisplayLinkDelegateErr = fmt.Errorf("metal: objc.RegisterClass for EbitengineCAMetalDisplayLinkDelegate failed: %w", err)
+			return
+		}
+		class_EbitengineCAMetalDisplayLinkDelegate = c
+	})
+	return classEbitengineCAMetalDisplayLinkDelegateErr
+}
+
+func (v *view) initCAMetalDisplayLink() error {
+	if err := registerCAMetalDisplayLinkDelegateClass(); err != nil {
+		return err
 	}
-	class_EbitengineCAMetalDisplayLinkDelegate = c
+	v.drawableCh = make(chan ca.MetalDrawable)
+	v.drawableDoneCh = make(chan struct{})
+	v.metalDisplayLinkRunLoop, v.metalDisplayLinkPort = createThreadWithRunLoop()
 
 	v.updateMetalDisplayLink()
 
 	return nil
+}
+
+// stopMetalDisplayLinkRunLoop ends the run loop's thread: with its port removed and the display link
+// invalidated the loop has no sources left, and a stop makes its run return.
+func (v *view) stopMetalDisplayLinkRunLoop() {
+	if v.metalDisplayLinkRunLoop.ID == 0 {
+		return
+	}
+	runLoop, port := v.metalDisplayLinkRunLoop, v.metalDisplayLinkPort
+	done := make(chan struct{})
+	b := objc.NewBlock(func(block objc.Block) {
+		runLoop.RemovePort(port, cocoa.NSRunLoopCommonModes)
+		cfRunLoopStop(cfRunLoopGetCurrent())
+		close(done)
+	})
+	defer b.Release()
+	runLoop.PerformBlock(b)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+	}
+	v.metalDisplayLinkRunLoop = cocoa.NSRunLoop{}
+	v.metalDisplayLinkPort = cocoa.NSMachPort{}
 }
 
 // updateMetalDisplayLink creates or destroys CAMetalDisplayLink for the current vsync and
@@ -155,7 +220,7 @@ func (v *view) updateMetalDisplayLink() {
 		return
 	}
 
-	// Destroy the display link while vsync is disabled or the window is being resized.
+	// Destroy the display link while vsync is disabled, the window is being resized, or the view closes.
 	// CAMetalLayer's nextDrawable is not available while CAMetalDisplayLink exists for the
 	// layer, and drawables must be obtained directly from the Metal layer in these cases
 	// (see nextDrawable):
@@ -165,7 +230,7 @@ func (v *view) updateMetalDisplayLink() {
 	//     drawable size keeps changing, and waiting for a drawable with the correct size
 	//     wastes the tight drawable pool. A drawable obtained directly from the Metal layer
 	//     always has the current drawable size (#3478).
-	if v.vsyncDisabled.Load() || v.liveResizing.Load() {
+	if v.vsyncDisabled.Load() || v.liveResizing.Load() || v.closing.Load() {
 		if v.metalDisplayLink == 0 {
 			return
 		}
@@ -212,6 +277,7 @@ func (v *view) updateMetalDisplayLink() {
 
 	if v.metalDisplayLinkDelegate == 0 {
 		v.metalDisplayLinkDelegate = objc.ID(class_EbitengineCAMetalDisplayLinkDelegate).Send(objc.RegisterName("new"))
+		rememberDelegateView(v.metalDisplayLinkDelegate, v)
 	}
 
 	ch := make(chan uintptr)
@@ -228,28 +294,48 @@ func (v *view) updateMetalDisplayLink() {
 	v.metalDisplayLink = <-ch
 }
 
-func createThreadWithRunLoop() cocoa.NSRunLoop {
-	ch := make(chan cocoa.NSRunLoop)
+// createThreadWithRunLoop starts a locked OS thread running a run loop, kept alive by a mach port; the port
+// is returned so stopMetalDisplayLinkRunLoop can remove it and let the thread end.
+func createThreadWithRunLoop() (cocoa.NSRunLoop, cocoa.NSMachPort) {
+	type loopAndPort struct {
+		runLoop cocoa.NSRunLoop
+		port    cocoa.NSMachPort
+	}
+	ch := make(chan loopAndPort)
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
 		runLoop := cocoa.NSRunLoop_currentRunLoop()
-		ch <- runLoop
-		close(ch)
-
 		// Add a dummy mach port to keep alive.
 		port := cocoa.NSMachPort_port()
 		runLoop.AddPort(port, cocoa.NSRunLoopCommonModes)
+		ch <- loopAndPort{runLoop, port}
+		close(ch)
 
+		// Runs until the port is removed and the loop stopped (a view's release).
 		runLoop.Run()
 	}()
 
-	runLoop := <-ch
-	if runLoop.ID == 0 {
+	lp := <-ch
+	if lp.runLoop.ID == 0 {
 		panic("metal: runLoop must be initialized")
 	}
-	return runLoop
+	return lp.runLoop, lp.port
+}
+
+var (
+	cfRunLoopGetCurrent func() uintptr
+	cfRunLoopStop       func(rl uintptr)
+)
+
+func init() {
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
+	if err != nil {
+		panic(err)
+	}
+	purego.RegisterLibFunc(&cfRunLoopGetCurrent, coreFoundation, "CFRunLoopGetCurrent")
+	purego.RegisterLibFunc(&cfRunLoopStop, coreFoundation, "CFRunLoopStop")
 }
 
 var displayLinkOutputCallbackPtr = purego.NewCallback(displayLinkOutputCallback)

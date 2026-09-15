@@ -68,9 +68,34 @@ func (v *view) initializeOS() error {
 	return nil
 }
 
-// release releases the resources created at initialize.
+// release releases the resources created at initialize: the CAMetalDisplayLink (its link, delegate and
+// run-loop thread), the CVDisplayLink, the presented handler, the layer. On the render thread, outside a frame.
 func (v *view) release() {
+	v.closing.Store(true)
+	// the CAMetalDisplayLink path: invalidate the link (the destroy branch, which also unblocks a delegate
+	// callback holding a drawable), then let the run loop's thread finish
+	v.updateMetalDisplayLink()
+	v.stopMetalDisplayLinkRunLoop()
+	if v.metalDisplayLinkDelegate != 0 {
+		forgetDelegateView(v.metalDisplayLinkDelegate)
+		v.metalDisplayLinkDelegate.Send(sel_release)
+		v.metalDisplayLinkDelegate = 0
+	}
+	// the CVDisplayLink path
 	v.releaseDisplayLink()
+	if v.presentedHandler != 0 {
+		v.presentedHandler.Release()
+		v.presentedHandler = 0
+	}
+	if v.drawableTimer != nil {
+		v.drawableTimer.Stop()
+		v.drawableTimer = nil
+	}
+	if v.ml != (ca.MetalLayer{}) {
+		v.ml.Release()
+		v.ml = ca.MetalLayer{}
+	}
+	v.window = 0
 }
 
 func (v *view) waitForDisplayLinkOutputCallback() {

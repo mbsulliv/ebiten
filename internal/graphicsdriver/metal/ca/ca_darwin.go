@@ -145,6 +145,11 @@ func NewMetalLayer(colorSpace color.ColorSpace) (MetalLayer, error) {
 }
 
 // Layer implements the Layer interface.
+// Release releases the layer (a view being torn down).
+func (ml MetalLayer) Release() {
+	ml.metalLayer.Send(sel_release)
+}
+
 func (ml MetalLayer) Layer() unsafe.Pointer {
 	return *(*unsafe.Pointer)(unsafe.Pointer(&ml.metalLayer))
 }

@@ -66,6 +66,7 @@ var (
 	sel_alloc                                      = objc.RegisterName("alloc")
 	sel_new                                        = objc.RegisterName("new")
 	sel_release                                    = objc.RegisterName("release")
+	sel_removePort_forMode                         = objc.RegisterName("removePort:forMode:")
 	sel_initWithUTF8String                         = objc.RegisterName("initWithUTF8String:")
 	sel_contentView                                = objc.RegisterName("contentView")
 	sel_object                                     = objc.RegisterName("object")
@@ -282,6 +283,10 @@ func NSRunLoop_currentRunLoop() NSRunLoop {
 
 func (r NSRunLoop) AddPort(port NSMachPort, mode NSRunLoopMode) {
 	r.Send(sel_addPort_forMode, port.ID, mode)
+}
+
+func (r NSRunLoop) RemovePort(port NSMachPort, mode NSRunLoopMode) {
+	r.Send(sel_removePort_forMode, port.ID, mode)
 }
 
 func (r NSRunLoop) Run() {

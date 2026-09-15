@@ -93,6 +93,16 @@ func applyVsyncEnabledIfNeeded(graphicsDriver graphicsdriver.Graphics) {
 	}
 }
 
+// currentView is the view (the window) the frames enqueued from now on belong to, set on the game goroutine
+// before a window's frame (SetCurrentView) and captured by each flush when it is enqueued, so an asynchronous
+// flush still reaches the right window when the next window's frame has already begun.
+var currentView atomic.Int64
+
+// SetCurrentView names the view the following frames present into (a driver without views ignores it).
+func SetCurrentView(id graphicsdriver.ViewID) {
+	currentView.Store(int64(id))
+}
+
 // FlushCommands executes queued commands with the given flush mode.
 func FlushCommands(graphicsDriver graphicsdriver.Graphics, mode graphicsdriver.FlushMode) error {
 	if err := theCommandQueueManager.flush(graphicsDriver, mode); err != nil {
@@ -241,10 +251,16 @@ func (q *commandQueue) Flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 
 	logger := debug.SwitchFrameLogger()
 
+	// The view of the window whose frame this is, captured now: the flush may run later.
+	view := graphicsdriver.ViewID(currentView.Load())
+
 	var flushErr error
 	runOnRenderThread(func() {
 		defer logger.Flush()
 
+		if v, ok := graphicsDriver.(graphicsdriver.Viewer); ok {
+			v.SetCurrentView(view)
+		}
 		applyVsyncEnabledIfNeeded(graphicsDriver)
 
 		if err := q.flush(graphicsDriver, mode, logger); err != nil {

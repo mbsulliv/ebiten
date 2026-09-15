@@ -68,6 +68,20 @@ type Resetter interface {
 	Reset() error
 }
 
+// ViewID names one of a Viewer's views: a window the driver presents into.
+type ViewID int
+
+// Viewer is implemented by a graphics driver that can present into several windows at once, one view each,
+// sharing its device, images and shaders. NewView creates a view for a native window (on the main thread);
+// SetCurrentView, on the render thread before Begin, names the view the frame's screen images and its present
+// belong to; ReleaseView, on the render thread and outside a frame, frees the view's resources. Frames are never
+// concurrent: one view is current at a time.
+type Viewer interface {
+	NewView(nativeWindow uintptr) (ViewID, error)
+	SetCurrentView(id ViewID)
+	ReleaseView(id ViewID)
+}
+
 type Image interface {
 	ID() ImageID
 	Dispose()

@@ -35,6 +35,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
 	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
 	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
+	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
 	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/opengl"
 	"github.com/hajimehoshi/ebiten/v2/internal/hook"
 	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
@@ -132,6 +133,10 @@ type glfwBackend struct {
 
 	// skipFrame is set by update when the window is unfocused and not runnable then: the step draws nothing.
 	skipFrame bool
+
+	// viewID is the window's view in a driver that presents into several windows (graphicsdriver.Viewer), 0
+	// for a driver that does not.
+	viewID graphicsdriver.ViewID
 
 	input         glfwInput
 	backendWindow glfwWindow
@@ -835,6 +840,7 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(outsideWidth, outsideHeig
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	go func() {
 		defer cancel()
+		graphicscommand.SetCurrentView(u.viewID)
 		err = u.context.forceUpdateFrame(u.ui.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.ui)
 	}()
 	_ = mainThread.NestedLoop(ctx)
@@ -1072,6 +1078,17 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 	switch g := u.ui.graphicsDriver.(type) {
 	case interface{ SetPresenter(opengl.Presenter) }:
 		g.SetPresenter(u.window)
+	case graphicsdriver.Viewer:
+		// a view of the driver's per window (Metal): the frames of this window present into it
+		w, err := u.nativeWindow()
+		if err != nil {
+			return err
+		}
+		id, err := g.NewView(w)
+		if err != nil {
+			return err
+		}
+		u.viewID = id
 	case interface{ SetWindow(uintptr) }:
 		w, err := u.nativeWindow()
 		if err != nil {
@@ -1552,6 +1569,7 @@ func (u *glfwBackend) stepFrame() (stepResult, error) {
 		u.context.resetVsyncDetection()
 	}
 
+	graphicscommand.SetCurrentView(u.viewID) // the frame's screen and present are this window's
 	presented, wait, err := u.context.updateFrame(u.ui.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.ui, present)
 	if err != nil {
 		return stepResult{}, err
