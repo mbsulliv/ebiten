@@ -16,6 +16,7 @@ package graphicscommand
 
 import (
 	"context"
+	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
 
 	"github.com/hajimehoshi/ebiten/v2/internal/thread"
 )
@@ -42,6 +43,17 @@ func runOnRenderThread(f func(), sync bool) {
 	// CallAsync should block when the previously-queued task is not executed yet.
 	// This blocking is expected as double-buffering is used.
 	theRenderThread.CallAsync(f)
+}
+
+// ReleaseView frees a driver's view (a closed window) on the render thread, after everything queued before it.
+func ReleaseView(graphicsDriver graphicsdriver.Graphics, id graphicsdriver.ViewID) {
+	v, ok := graphicsDriver.(graphicsdriver.Viewer)
+	if !ok || id == 0 {
+		return
+	}
+	theRenderThread.Call(func() {
+		v.ReleaseView(id)
+	})
 }
 
 func Terminate() {

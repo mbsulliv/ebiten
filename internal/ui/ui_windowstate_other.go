@@ -16,8 +16,22 @@
 
 package ui
 
+import "errors"
+
 // These platforms have one screen and no windows of their own: the UserInterface's fields hold the state.
 
 func (u *UserInterface) windowState() windowState { return nil }
 
 func (u *UserInterface) currentContext() *context { return u.context }
+
+// CurrentWindowID is 0: one screen, no windows.
+func (u *UserInterface) CurrentWindowID() int { return 0 }
+
+// OpenWindow is not available: there is one screen.
+func (u *UserInterface) OpenWindow(game Game, opts *WindowOptions) (int, error) {
+	return 0, errors.New("ui: windows cannot be opened on this platform")
+}
+
+func (u *UserInterface) CloseWindow(id int)          {}
+func (u *UserInterface) WithWindow(id int, f func()) { f() }
+func (u *UserInterface) IsWindowClosed(id int) bool  { return true }

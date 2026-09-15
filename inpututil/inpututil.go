@@ -50,16 +50,37 @@ type inputState struct {
 	m sync.RWMutex
 }
 
-var theInputState = &inputState{
-	gamepadStates:     map[ebiten.GamepadID]gamepadState{},
-	prevGamepadStates: map[ebiten.GamepadID]gamepadState{},
-	touchStates:       map[ebiten.TouchID]touchState{},
-	prevTouchStates:   map[ebiten.TouchID]touchState{},
+// One state per window: the hook before a window's Update updates that window's, and the readers report the
+// window the package-level calls resolve to (see ui.CurrentWindowID).
+var (
+	statesM sync.Mutex
+	states  = map[int]*inputState{}
+)
+
+func newInputState() *inputState {
+	return &inputState{
+		gamepadStates:     map[ebiten.GamepadID]gamepadState{},
+		prevGamepadStates: map[ebiten.GamepadID]gamepadState{},
+		touchStates:       map[ebiten.TouchID]touchState{},
+		prevTouchStates:   map[ebiten.TouchID]touchState{},
+	}
+}
+
+func windowInputState() *inputState {
+	id := ui.Get().CurrentWindowID()
+	statesM.Lock()
+	defer statesM.Unlock()
+	s := states[id]
+	if s == nil {
+		s = newInputState()
+		states[id] = s
+	}
+	return s
 }
 
 func init() {
 	hook.AppendHookOnBeforeUpdate(func() error {
-		theInputState.update()
+		windowInputState().update()
 		return nil
 	})
 }
@@ -243,12 +264,12 @@ func MouseButtonPressDuration(button ebiten.MouseButton) int {
 //
 // AppendJustConnectedGamepadIDs is concurrent safe.
 func AppendJustConnectedGamepadIDs(gamepadIDs []ebiten.GamepadID) []ebiten.GamepadID {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
 	origLen := len(gamepadIDs)
-	for id := range theInputState.gamepadStates {
-		if _, ok := theInputState.prevGamepadStates[id]; !ok {
+	for id := range windowInputState().gamepadStates {
+		if _, ok := windowInputState().prevGamepadStates[id]; !ok {
 			gamepadIDs = append(gamepadIDs, id)
 		}
 	}
@@ -273,11 +294,11 @@ func JustConnectedGamepadIDs() []ebiten.GamepadID {
 //
 // IsGamepadJustDisconnected is concurrent safe.
 func IsGamepadJustDisconnected(id ebiten.GamepadID) bool {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	_, current := theInputState.gamepadStates[id]
-	_, prev := theInputState.prevGamepadStates[id]
+	_, current := windowInputState().gamepadStates[id]
+	_, prev := windowInputState().prevGamepadStates[id]
 	return !current && prev
 }
 
@@ -288,10 +309,10 @@ func IsGamepadJustDisconnected(id ebiten.GamepadID) bool {
 //
 // AppendPressedGamepadButtons is concurrent safe.
 func AppendPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadButton) []ebiten.GamepadButton {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return buttons
 	}
@@ -313,10 +334,10 @@ func AppendPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadBu
 //
 // AppendJustPressedGamepadButtons is concurrent safe.
 func AppendJustPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadButton) []ebiten.GamepadButton {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return buttons
 	}
@@ -338,14 +359,14 @@ func AppendJustPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.Gamep
 //
 // AppendJustReleasedGamepadButtons is concurrent safe.
 func AppendJustReleasedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadButton) []ebiten.GamepadButton {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return buttons
 	}
-	prevState, ok := theInputState.prevGamepadStates[id]
+	prevState, ok := windowInputState().prevGamepadStates[id]
 	if !ok {
 		return buttons
 	}
@@ -384,14 +405,14 @@ func IsGamepadButtonJustReleased(id ebiten.GamepadID, button ebiten.GamepadButto
 		return false
 	}
 
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return false
 	}
-	prevState, ok := theInputState.prevGamepadStates[id]
+	prevState, ok := windowInputState().prevGamepadStates[id]
 	if !ok {
 		return false
 	}
@@ -409,10 +430,10 @@ func GamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.GamepadButton
 		return 0
 	}
 
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return 0
 	}
@@ -427,10 +448,10 @@ func GamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.GamepadButton
 //
 // AppendPressedStandardGamepadButtons is concurrent safe.
 func AppendPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.StandardGamepadButton) []ebiten.StandardGamepadButton {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return buttons
 	}
@@ -452,10 +473,10 @@ func AppendPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.S
 //
 // AppendJustPressedStandardGamepadButtons is concurrent safe.
 func AppendJustPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.StandardGamepadButton) []ebiten.StandardGamepadButton {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return buttons
 	}
@@ -477,14 +498,14 @@ func AppendJustPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebit
 //
 // AppendJustReleasedStandardGamepadButtons is concurrent safe.
 func AppendJustReleasedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.StandardGamepadButton) []ebiten.StandardGamepadButton {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return buttons
 	}
-	prevState, ok := theInputState.prevGamepadStates[id]
+	prevState, ok := windowInputState().prevGamepadStates[id]
 	if !ok {
 		return buttons
 	}
@@ -523,14 +544,14 @@ func IsStandardGamepadButtonJustReleased(id ebiten.GamepadID, button ebiten.Stan
 		return false
 	}
 
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return false
 	}
-	prevState, ok := theInputState.prevGamepadStates[id]
+	prevState, ok := windowInputState().prevGamepadStates[id]
 	if !ok {
 		return false
 	}
@@ -548,10 +569,10 @@ func StandardGamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.Stand
 		return 0
 	}
 
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state, ok := theInputState.gamepadStates[id]
+	state, ok := windowInputState().gamepadStates[id]
 	if !ok {
 		return 0
 	}
@@ -572,11 +593,11 @@ func StandardGamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.Stand
 //
 // AppendJustPressedTouchIDs is concurrent safe.
 func AppendJustPressedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
 	origLen := len(touchIDs)
-	for id, state := range theInputState.touchStates {
+	for id, state := range windowInputState().touchStates {
 		if state.duration != 1 {
 			continue
 		}
@@ -607,16 +628,16 @@ func JustPressedTouchIDs() []ebiten.TouchID {
 //
 // AppendJustReleasedTouchIDs is concurrent safe.
 func AppendJustReleasedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
 	origLen := len(touchIDs)
 	// Iterate prevTouchStates instead of touchStates since touchStates doesn't have released touches.
-	for id, state := range theInputState.prevTouchStates {
+	for id, state := range windowInputState().prevTouchStates {
 		if state.duration == 0 {
 			continue
 		}
-		if theInputState.touchStates[id].duration != 0 {
+		if windowInputState().touchStates[id].duration != 0 {
 			continue
 		}
 		touchIDs = append(touchIDs, id)
@@ -636,11 +657,11 @@ func AppendJustReleasedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
 //
 // IsTouchJustReleased is concurrent safe.
 func IsTouchJustReleased(id ebiten.TouchID) bool {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	current := theInputState.touchStates[id]
-	prev := theInputState.prevTouchStates[id]
+	current := windowInputState().touchStates[id]
+	prev := windowInputState().prevTouchStates[id]
 	return current.duration == 0 && prev.duration > 0
 }
 
@@ -653,9 +674,9 @@ func IsTouchJustReleased(id ebiten.TouchID) bool {
 //
 // TouchPressDuration is concurrent safe.
 func TouchPressDuration(id ebiten.TouchID) int {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
-	return theInputState.touchStates[id].duration
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
+	return windowInputState().touchStates[id].duration
 }
 
 // TouchPositionInPreviousTick returns the position in the previous tick.
@@ -682,9 +703,9 @@ func TouchPositionInPreviousTick(id ebiten.TouchID) (int, int) {
 //
 // TouchPositionFInPreviousTick is concurrent safe.
 func TouchPositionFInPreviousTick(id ebiten.TouchID) (float64, float64) {
-	theInputState.m.RLock()
-	defer theInputState.m.RUnlock()
+	windowInputState().m.RLock()
+	defer windowInputState().m.RUnlock()
 
-	state := theInputState.prevTouchStates[id]
+	state := windowInputState().prevTouchStates[id]
 	return state.x, state.y
 }

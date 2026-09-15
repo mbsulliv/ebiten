@@ -23,8 +23,11 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/internal/ui"
 )
 
+// One input state per window, keyed by the window the package-level calls resolve to (ui.CurrentWindowID: the
+// window whose Update or Draw is running, else the primary; 0 where there are no windows).
 var (
-	theInputState inputState
+	statesM sync.Mutex
+	states  = map[int]*inputState{}
 )
 
 type inputState struct {
@@ -33,7 +36,22 @@ type inputState struct {
 }
 
 func Get() *inputState {
-	return &theInputState
+	id := ui.Get().CurrentWindowID()
+	statesM.Lock()
+	defer statesM.Unlock()
+	s := states[id]
+	if s == nil {
+		s = &inputState{}
+		states[id] = s
+	}
+	return s
+}
+
+// Remove drops a closed window's state.
+func Remove(id int) {
+	statesM.Lock()
+	defer statesM.Unlock()
+	delete(states, id)
 }
 
 func (i *inputState) Update(fn func(*ui.InputState)) {
@@ -85,12 +103,13 @@ func (i *inputState) KeyPressDuration(key ui.Key) int64 {
 }
 
 func AppendPressedKeys[T ~int](keys []T) []T {
-	theInputState.m.Lock()
-	defer theInputState.m.Unlock()
+	s := Get()
+	s.m.Lock()
+	defer s.m.Unlock()
 
 	tick := ui.Get().Tick()
 	for k := ui.Key(0); k <= ui.KeyMax; k++ {
-		if !theInputState.state.IsKeyPressed(k, tick) {
+		if !s.state.IsKeyPressed(k, tick) {
 			continue
 		}
 		keys = append(keys, T(k))
@@ -99,12 +118,13 @@ func AppendPressedKeys[T ~int](keys []T) []T {
 }
 
 func AppendJustPressedKeys[T ~int](keys []T) []T {
-	theInputState.m.Lock()
-	defer theInputState.m.Unlock()
+	s := Get()
+	s.m.Lock()
+	defer s.m.Unlock()
 
 	tick := ui.Get().Tick()
 	for k := ui.Key(0); k <= ui.KeyMax; k++ {
-		if !theInputState.state.IsKeyJustPressed(k, tick) {
+		if !s.state.IsKeyJustPressed(k, tick) {
 			continue
 		}
 		keys = append(keys, T(k))
@@ -113,12 +133,13 @@ func AppendJustPressedKeys[T ~int](keys []T) []T {
 }
 
 func AppendJustReleasedKeys[T ~int](keys []T) []T {
-	theInputState.m.Lock()
-	defer theInputState.m.Unlock()
+	s := Get()
+	s.m.Lock()
+	defer s.m.Unlock()
 
 	tick := ui.Get().Tick()
 	for k := ui.Key(0); k <= ui.KeyMax; k++ {
-		if !theInputState.state.IsKeyJustReleased(k, tick) {
+		if !s.state.IsKeyJustReleased(k, tick) {
 			continue
 		}
 		keys = append(keys, T(k))
@@ -163,10 +184,11 @@ func (i *inputState) Wheel() (float64, float64) {
 }
 
 func AppendTouchIDs[T ~int](touches []T) []T {
-	theInputState.m.Lock()
-	defer theInputState.m.Unlock()
+	s := Get()
+	s.m.Lock()
+	defer s.m.Unlock()
 
-	for _, t := range theInputState.state.Touches {
+	for _, t := range s.state.Touches {
 		touches = append(touches, T(t.ID))
 	}
 	return touches

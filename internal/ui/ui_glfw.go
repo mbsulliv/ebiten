@@ -64,6 +64,11 @@ type glfwBackend struct {
 	// created is set once window exists (createWindow); the window's settings are buffered until then.
 	created atomic.Bool
 
+	// id numbers the window for the package-level API (CurrentWindowID); closed is set on the main thread just
+	// before the GLFW window is destroyed, and every main-thread closure checks it as it checks termination.
+	id     int
+	closed atomic.Bool
+
 	// The window's own game context and settings (formerly on UserInterface, one per process): the context
 	// runs this window's game; desktopWindow holds its title, size, position and the other window settings;
 	// the counters and the settings below start from the UserInterface's defaults at creation.
@@ -179,8 +184,10 @@ func maybeNewGLFWBackend(u *UserInterface) *glfwBackend {
 }
 
 func newGLFWBackend(u *UserInterface) *glfwBackend {
+	u.nextWindowID++
 	b := &glfwBackend{
 		ui: u,
+		id: u.nextWindowID,
 	}
 	b.windowToRestore.pos = image.Pt(invalidPos, invalidPos)
 	b.windowToRestore.size = image.Pt(invalidSize, invalidSize)
@@ -345,7 +352,7 @@ func (u *UserInterface) ensureGLFWInit() error {
 func (u *glfwBackend) Monitor() *Monitor {
 	var monitor *Monitor
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		m, err := u.currentMonitor()
@@ -455,7 +462,7 @@ func (u *glfwBackend) isFullscreen() (bool, error) {
 func (u *glfwBackend) IsFullscreen() bool {
 	var fullscreen bool
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		b, err := u.isFullscreen()
@@ -470,7 +477,7 @@ func (u *glfwBackend) IsFullscreen() bool {
 
 func (u *glfwBackend) SetFullscreen(fullscreen bool) {
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		f, err := u.isFullscreen()
@@ -491,7 +498,7 @@ func (u *glfwBackend) SetFullscreen(fullscreen bool) {
 func (u *glfwBackend) IsFocused() bool {
 	var focused bool
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		a, err := u.window.GetAttrib(glfw.Focused)
@@ -506,7 +513,7 @@ func (u *glfwBackend) IsFocused() bool {
 
 func (u *glfwBackend) applyFPSMode() {
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		if err := u.setFPSMode(FPSModeType(u.fpsMode.Load())); err != nil {
@@ -520,7 +527,7 @@ func (u *glfwBackend) ScheduleFrame() {
 	// This check can slip past a termination running on the main thread, and then
 	// PostEmptyEvent touches GLFW's state after glfw.Terminate. PostEmptyEvent must stay
 	// harmless in that case.
-	if u.ui.isTerminated() {
+	if u.ui.isTerminated() || u.closed.Load() {
 		return
 	}
 
@@ -535,7 +542,7 @@ func (u *glfwBackend) ScheduleFrame() {
 func (u *glfwBackend) CursorMode() CursorMode {
 	var v CursorMode
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		mode, err := u.window.GetInputMode(glfw.CursorMode)
@@ -559,7 +566,7 @@ func (u *glfwBackend) CursorMode() CursorMode {
 
 func (u *glfwBackend) SetCursorMode(mode CursorMode) {
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		if err := u.window.SetInputMode(glfw.CursorMode, driverCursorModeToGLFWCursorMode(mode)); err != nil {
@@ -577,7 +584,7 @@ func (u *glfwBackend) SetCursorMode(mode CursorMode) {
 
 func (u *glfwBackend) applyCursorShape() {
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		if err := u.window.SetCursor(glfwSystemCursors[u.getCursorShape()]); err != nil {
@@ -605,8 +612,9 @@ func (u *glfwBackend) createWindow() error {
 	}
 	u.window = window
 	u.created.Store(true)
-	// Publish the backend and set the running state true just as a window is set (#2742).
-	u.ui.setRunningBackend(u)
+	// Publish the backend and set the running state true just as a window is set (#2742); a later window
+	// joins the list beside the primary.
+	u.ui.publishWindow(u)
 
 	// The position must be set before the size is set (#1982).
 	// setWindowSizeInDIP refers the current monitor's device scale.
@@ -841,7 +849,50 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(outsideWidth, outsideHeig
 	go func() {
 		defer cancel()
 		graphicscommand.SetCurrentView(u.viewID)
+		prev := u.ui.current.Swap(u) // the forced frame is this window's
+		defer u.ui.current.Store(prev)
 		err = u.context.forceUpdateFrame(u.ui.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.ui)
+		if err != nil {
+			return
+		}
+		// The resize's modal loop holds the pump, so the other windows get no passes for the drag: give each
+		// an ordinary frame here (their Update at their own rate, a Draw only when something changed), so a
+		// resize of one window does not freeze the rest.
+		for _, w := range u.ui.snapshotWindows() {
+			if w == u || !w.created.Load() || w.closed.Load() || !w.bufferOnceSwapped {
+				continue
+			}
+			var ow, oh float64
+			var sw, sh int
+			var dsf float64
+			var werr error
+			u.ui.mainThread.Call(func() {
+				ow, oh, sw, sh, werr = w.layoutSizes()
+				if werr != nil {
+					return
+				}
+				m, e := w.currentMonitor()
+				if e != nil {
+					werr = e
+					return
+				}
+				dsf = m.DeviceScaleFactor()
+				if cx, cy, e := w.window.GetCursorPos(); e == nil {
+					w.input.setRawCursorPos(cx, cy)
+				}
+			})
+			if werr != nil {
+				err = werr
+				return
+			}
+			graphicscommand.SetCurrentView(w.viewID)
+			u.ui.current.Store(w)
+			_, _, werr = w.context.updateFrame(u.ui.graphicsDriver, ow, oh, sw, sh, dsf, u.ui, true)
+			if werr != nil {
+				err = werr
+				return
+			}
+		}
 	}()
 	_ = mainThread.NestedLoop(ctx)
 	if err != nil {
@@ -980,16 +1031,24 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 		return err
 	}
 
-	g, lib, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
-		transparent: options.ScreenTransparent,
-		colorSpace:  options.ColorSpace,
-	}, options.GraphicsLibrary)
-	if err != nil {
-		return err
+	// the graphics driver is the process's: made for the first window, shared by the later ones
+	lib := u.ui.GraphicsLibrary()
+	if u.ui.graphicsDriver == nil {
+		g, l, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
+			transparent: options.ScreenTransparent,
+			colorSpace:  options.ColorSpace,
+		}, options.GraphicsLibrary)
+		if err != nil {
+			return err
+		}
+		lib = l
+		u.ui.graphicsDriver = g
+		u.ui.setGraphicsLibrary(lib)
+		u.ui.graphicsDriver.SetTransparent(options.ScreenTransparent)
+	} else if _, ok := u.ui.graphicsDriver.(graphicsdriver.Viewer); !ok {
+		return errors.New("ui: the graphics driver presents into one window only")
 	}
-	u.ui.graphicsDriver = g
-	u.ui.setGraphicsLibrary(lib)
-	u.ui.graphicsDriver.SetTransparent(options.ScreenTransparent)
+	g := u.ui.graphicsDriver
 
 	// The OpenGL driver needs a window with a GL context, unlike the other drivers.
 	// Set the context-related hints before creating a window.
@@ -1334,8 +1393,20 @@ func (u *glfwBackend) update() (outsideWidth, outsideHeight float64, screenWidth
 	}
 
 	// The event pump ran once for the pass, for every window (pumpEvents); what follows is this window's own.
-	u.syncModKeysFromOS()
-	u.syncLockKeysFromOS()
+	// The modifier and lock-key state read from the OS (macOS) is the keyboard's, which belongs to the focused
+	// window: an unfocused one must not see Ctrl go down.
+	syncKeys := true
+	if runtime.GOOS == "darwin" {
+		focused, err := u.window.GetAttrib(glfw.Focused)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		syncKeys = focused == glfw.True
+	}
+	if syncKeys {
+		u.syncModKeysFromOS()
+		u.syncLockKeysFromOS()
+	}
 
 	// A window that is not runnable while unfocused skips its frames while it is unfocused: the pass keeps
 	// pumping events and pacing, so the window never spins and never blocks the others. For the first update,
@@ -1398,12 +1469,18 @@ func (u *glfwBackend) loopGame() (err error) {
 		var anyPresented, anyFocused bool
 		var wait time.Duration
 		for _, w := range windows {
+			u.ui.setCurrentWindow(w) // the package-level calls resolve to this window for its whole step
 			r, err := w.stepFrame()
+			u.ui.setCurrentWindow(nil)
 			if errors.Is(err, RegularTermination) {
-				// The window is done. Its teardown (the GLFW window, the view) is the closing work of the
-				// next layer; until then a window that closes ends the loop, as it always has.
-				u.ui.removeWindow(w)
-				return err
+				// The window is done (its close button, or Termination from its Update). The last window
+				// ends the loop, as it always has; another is torn down and the rest go on.
+				if len(u.ui.snapshotWindows()) <= 1 {
+					u.ui.removeWindow(w)
+					return err
+				}
+				u.ui.closeWindow(w)
+				continue
 			}
 			if err != nil {
 				return err
@@ -1621,7 +1698,7 @@ func (u *glfwBackend) updateIconIfNeeded() error {
 
 	var err error
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		// In the fullscreen mode, SetIcon fails (#1578).

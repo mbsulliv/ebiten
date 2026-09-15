@@ -125,6 +125,12 @@ type userInterfaceImpl struct {
 
 	// passNextWake is the deadline of the pass's idle wait (glfwBackend.pacePass), on the game goroutine.
 	passNextWake time.Time
+
+	// current is the window whose step is running (ui_windowstate_desktop.go); nextWindowID numbers the
+	// windows; runOptions are the game's run options, which a window opened later starts from.
+	current      atomic.Pointer[glfwBackend]
+	nextWindowID int
+	runOptions   *RunOptions
 }
 
 func (u *UserInterface) init() error {
@@ -138,6 +144,7 @@ func (u *UserInterface) init() error {
 }
 
 func (u *UserInterface) Run(game Game, options *RunOptions) error {
+	u.runOptions = options
 	b := maybeNewVMGuestBackend(u, options)
 	vmguest.MarkGuest(b != nil)
 	if b != nil {
@@ -197,9 +204,17 @@ func (u *UserInterface) setRunningBackend(b uiBackend) {
 	u.setRunning(true)
 }
 
-// runningBackend returns the backend serving the running game, or nil if the
-// game is not running.
+// runningBackend returns the backend the package-level calls resolve to: the window whose step is running,
+// else the primary backend; nil if the game is not running.
 func (u *UserInterface) runningBackend() uiBackend {
+	if c := u.current.Load(); c != nil {
+		return c
+	}
+	return u.primaryBackend()
+}
+
+// primaryBackend is the published backend (the primary window), or nil if the game is not running.
+func (u *UserInterface) primaryBackend() uiBackend {
 	b := u.backend.Load()
 	if b == nil {
 		return nil

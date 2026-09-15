@@ -397,7 +397,12 @@ func isRunGameEnded() bool {
 //
 // ScreenSize is concurrent-safe.
 func ScreenSize() (int, int) {
-	s := screenSize.Load()
+	v, ok := screenSizes.Load(ui.Get().CurrentWindowID())
+	if !ok {
+		return 0, 0
+	}
+	p := v.(image.Point)
+	s := &p
 	if s == nil {
 		return 0, 0
 	}

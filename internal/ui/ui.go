@@ -222,6 +222,26 @@ type RunOptions struct {
 	VMGuestEndpoint          string
 }
 
+// WindowOptions describe a window opened while the game runs (OpenWindow): its own game and settings.
+type WindowOptions struct {
+	Title          string
+	WidthInDIP     int
+	HeightInDIP    int
+	XInDIP         int
+	YInDIP         int
+	PositionSet    bool
+	Decorated      bool
+	ResizingMode   WindowResizingMode
+	Floating       bool
+	Visible        bool
+	Maximized      bool
+	MinWidthInDIP  int
+	MinHeightInDIP int
+	MaxWidthInDIP  int
+	MaxHeightInDIP int
+	SizeLimitsSet  bool
+}
+
 // InitialWindowPosition returns the position to place a window of size (ww, wh) in a monitor of size (mw, mh).
 func InitialWindowPosition(mw, mh, ww, wh int) (x, y int) {
 	// The vertical position is visually centered rather than exactly centered: the space below the window

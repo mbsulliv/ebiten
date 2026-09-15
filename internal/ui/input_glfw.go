@@ -329,7 +329,7 @@ func (u *glfwBackend) KeyName(key Key) string {
 
 	var name string
 	u.ui.mainThread.Call(func() {
-		if u.ui.isTerminated() {
+		if u.ui.isTerminated() || u.closed.Load() {
 			return
 		}
 		n, err := glfw.GetKeyName(gk, 0)
