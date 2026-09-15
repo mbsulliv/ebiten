@@ -102,6 +102,25 @@ func (u *UserInterface) windowByID(id int) *glfwBackend {
 	return nil
 }
 
+// NativeWindow is the platform's handle for a window (an NSWindow, an HWND, an X11 window), 0 when it is
+// closed or unknown; on the main thread.
+func (u *UserInterface) NativeWindow(id int) uintptr {
+	b := u.windowByID(id)
+	if b == nil {
+		return 0
+	}
+	var h uintptr
+	u.mainThread.Call(func() {
+		if !b.created.Load() || b.closed.Load() {
+			return
+		}
+		if w, err := b.nativeWindow(); err == nil {
+			h = w
+		}
+	})
+	return h
+}
+
 // IsWindowClosed reports whether a window id no longer names a live window.
 func (u *UserInterface) IsWindowClosed(id int) bool {
 	b := u.windowByID(id)
@@ -159,6 +178,24 @@ func (u *UserInterface) OpenWindow(game Game, opts *WindowOptions) (int, error) 
 	// the window's first frame comes from the next pass; wake the pump in case it is waiting for an event
 	_ = glfw.PostEmptyEvent()
 	return b.id, nil
+}
+
+// FocusWindow brings a window to the front with the keyboard focus, restoring it first when minimized.
+func (u *UserInterface) FocusWindow(id int) {
+	b := u.windowByID(id)
+	if b == nil {
+		return
+	}
+	u.mainThread.Call(func() {
+		if b.closed.Load() || !b.created.Load() {
+			return
+		}
+		if a, err := b.window.GetAttrib(glfw.Iconified); err == nil && a == glfw.True {
+			_ = b.window.Restore()
+		}
+		_ = b.window.Focus()
+	})
+	_ = glfw.PostEmptyEvent()
 }
 
 // CloseWindow asks a window to close: its next step ends it, and the loop tears it down.

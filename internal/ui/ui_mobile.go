@@ -192,7 +192,7 @@ func (u *UserInterface) update() error {
 	w, h := u.outsideSize()
 	s := theMonitor.DeviceScaleFactor()
 	sw, sh := u.screenSize(w, h, s)
-	if err := u.context.updateFrame(u.graphicsDriver, w, h, sw, sh, s, u, true); err != nil {
+	if _, _, err := u.context.updateFrame(u.graphicsDriver, w, h, sw, sh, s, u, true); err != nil {
 		return err
 	}
 	return nil

@@ -155,3 +155,11 @@ func (w *Window) IsFullscreen() (fullscreen bool) {
 func (w *Window) SetFullscreen(fullscreen bool) { w.Do(func() { SetFullscreen(fullscreen) }) }
 
 func (w *Window) RequestAttention() { w.Do(func() { RequestAttention() }) }
+
+// Focus brings the window to the front with the keyboard focus (restoring it when minimized); on macOS this
+// also activates the application. May be called from any window's Update or from another goroutine.
+func (w *Window) Focus() { ui.Get().FocusWindow(w.id) }
+
+// NativeHandle is the platform's window handle: an NSWindow pointer on macOS, an HWND on Windows, an X11 window
+// on Linux; 0 once the window is closed. For platform code that observes the window (occlusion, notifications).
+func (w *Window) NativeHandle() uintptr { return ui.Get().NativeWindow(w.id) }

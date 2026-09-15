@@ -311,10 +311,10 @@ func (u *UserInterface) SetFullscreen(fullscreen bool) {
 
 // The settings below are held twice: on the UserInterface as the default for windows created later (and for
 // a backend without windows of its own), and on each GLFW window as its own copy, which is what the
-// package-level API reads and writes while that window is the primary.
+// package-level API reads and writes while that window is the current one (stepping, else the primary).
 
 func (u *UserInterface) IsRunnableOnUnfocused() bool {
-	if b := u.primaryGLFW(); b != nil {
+	if b := u.currentGLFW(); b != nil {
 		return b.isRunnableOnUnfocused()
 	}
 	return u.isRunnableOnUnfocused()
@@ -322,13 +322,13 @@ func (u *UserInterface) IsRunnableOnUnfocused() bool {
 
 func (u *UserInterface) SetRunnableOnUnfocused(runnableOnUnfocused bool) {
 	u.setRunnableOnUnfocused(runnableOnUnfocused)
-	if b := u.primaryGLFW(); b != nil {
+	if b := u.currentGLFW(); b != nil {
 		b.setRunnableOnUnfocused(runnableOnUnfocused)
 	}
 }
 
 func (u *UserInterface) FPSMode() FPSModeType {
-	if b := u.primaryGLFW(); b != nil {
+	if b := u.currentGLFW(); b != nil {
 		return b.FPSMode()
 	}
 	return FPSModeType(u.fpsMode.Load())
@@ -339,7 +339,7 @@ func (u *UserInterface) SetFPSMode(mode FPSModeType) {
 		return
 	}
 	changed := FPSModeType(u.fpsMode.Swap(int32(mode))) != mode
-	if g := u.primaryGLFW(); g != nil {
+	if g := u.currentGLFW(); g != nil {
 		if FPSModeType(g.fpsMode.Swap(int32(mode))) == mode {
 			return
 		}
@@ -388,7 +388,7 @@ func (u *UserInterface) SetCursorMode(mode CursorMode) {
 }
 
 func (u *UserInterface) CursorShape() CursorShape {
-	if b := u.primaryGLFW(); b != nil {
+	if b := u.currentGLFW(); b != nil {
 		return b.getCursorShape()
 	}
 	return u.getCursorShape()
@@ -399,7 +399,7 @@ func (u *UserInterface) SetCursorShape(shape CursorShape) {
 		return
 	}
 	changed := CursorShape(u.cursorShape.Swap(int32(shape))) != shape
-	if g := u.primaryGLFW(); g != nil {
+	if g := u.currentGLFW(); g != nil {
 		if CursorShape(g.cursorShape.Swap(int32(shape))) == shape {
 			return
 		}
@@ -416,13 +416,13 @@ func (u *UserInterface) SetCursorShape(shape CursorShape) {
 	b.applyCursorShape()
 }
 
-// Window is the primary window's settings while a GLFW window runs, else the settings buffered for the window
-// to come (or for a backend without windows of its own).
+// Window is the current window's settings while a GLFW window runs (the stepping window, else the primary),
+// else the settings buffered for the window to come (or for a backend without windows of its own).
 func (u *UserInterface) Window() Window {
 	if microsoftgdk.IsXbox() {
 		return &nullWindow{}
 	}
-	if b := u.primaryGLFW(); b != nil {
+	if b := u.currentGLFW(); b != nil {
 		return &b.desktopWindow
 	}
 	return &u.desktopWindow

@@ -1507,7 +1507,15 @@ func (u *glfwBackend) pumpEvents(windows []*glfwBackend) error {
 				w.pollingEvents = false
 			}
 		}()
-		if u.ui.FPSMode() != FPSModeVsyncOffMinimum {
+		// A window that has not presented yet is still hidden (shown at its first frame): poll rather than wait
+		// so that frame is not held until some unrelated event arrives, which on macOS can be seconds after launch.
+		wait := u.ui.FPSMode() == FPSModeVsyncOffMinimum
+		for _, w := range windows {
+			if !w.bufferOnceSwapped {
+				wait = false
+			}
+		}
+		if !wait {
 			// TODO: Updating the input can be skipped when clock.Update returns 0 (#1367).
 			err = glfw.PollEvents()
 		} else {
