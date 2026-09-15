@@ -58,6 +58,7 @@ type defaultContext struct {
 	gpFlush                    uintptr
 	gpFramebufferRenderbuffer  uintptr
 	gpFramebufferTexture2D     uintptr
+	gpBlitFramebuffer          uintptr
 	gpGenBuffers               uintptr
 	gpGenFramebuffers          uintptr
 	gpGenRenderbuffers         uintptr
@@ -296,6 +297,10 @@ func (c *defaultContext) FramebufferTexture2D(target uint32, attachment uint32, 
 	purego.SyscallN(c.gpFramebufferTexture2D, uintptr(target), uintptr(attachment), uintptr(textarget), uintptr(texture), uintptr(level))
 }
 
+func (c *defaultContext) BlitFramebuffer(srcX0 int32, srcY0 int32, srcX1 int32, srcY1 int32, dstX0 int32, dstY0 int32, dstX1 int32, dstY1 int32, mask uint32, filter uint32) {
+	purego.SyscallN(c.gpBlitFramebuffer, uintptr(srcX0), uintptr(srcY0), uintptr(srcX1), uintptr(srcY1), uintptr(dstX0), uintptr(dstY0), uintptr(dstX1), uintptr(dstY1), uintptr(mask), uintptr(filter))
+}
+
 func (c *defaultContext) GetError() uint32 {
 	ret, _, _ := purego.SyscallN(c.gpGetError)
 	return uint32(ret)
@@ -516,6 +521,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpFlush = g.get("glFlush")
 	c.gpFramebufferRenderbuffer = g.get("glFramebufferRenderbuffer")
 	c.gpFramebufferTexture2D = g.get("glFramebufferTexture2D")
+	c.gpBlitFramebuffer = g.get("glBlitFramebuffer")
 	c.gpGenBuffers = g.get("glGenBuffers")
 	c.gpGenFramebuffers = g.get("glGenFramebuffers")
 	c.gpGenRenderbuffers = g.get("glGenRenderbuffers")

@@ -32,6 +32,7 @@ type Context interface {
 	BindAttribLocation(program uint32, index uint32, name string)
 	BindBuffer(target uint32, buffer uint32)
 	BindFramebuffer(target uint32, framebuffer uint32)
+	BlitFramebuffer(srcX0 int32, srcY0 int32, srcX1 int32, srcY1 int32, dstX0 int32, dstY0 int32, dstX1 int32, dstY1 int32, mask uint32, filter uint32)
 	BindRenderbuffer(target uint32, renderbuffer uint32)
 	BindTexture(target uint32, texture uint32)
 	BindVertexArray(array uint32)

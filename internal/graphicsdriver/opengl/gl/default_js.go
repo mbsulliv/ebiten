@@ -58,6 +58,7 @@ type defaultContext struct {
 	fnFinish                   js.Value
 	fnFramebufferRenderbuffer  js.Value
 	fnFramebufferTexture2D     js.Value
+	fnBlitFramebuffer          js.Value // undefined on WebGL 1
 	fnFlush                    js.Value
 	fnGetError                 js.Value
 	fnGetExtension             js.Value
@@ -189,6 +190,7 @@ func NewDefaultContext(v js.Value) (Context, error) {
 		fnFinish:                   v.Get("finish").Call("bind", v),
 		fnFramebufferRenderbuffer:  v.Get("framebufferRenderbuffer").Call("bind", v),
 		fnFramebufferTexture2D:     v.Get("framebufferTexture2D").Call("bind", v),
+		fnBlitFramebuffer:          bindIfDefined(v, "blitFramebuffer"),
 		fnFlush:                    v.Get("flush").Call("bind", v),
 		fnGetError:                 v.Get("getError").Call("bind", v),
 		fnGetExtension:             v.Get("getExtension").Call("bind", v),
@@ -425,6 +427,22 @@ func (c *defaultContext) FramebufferRenderbuffer(target uint32, attachment uint3
 
 func (c *defaultContext) FramebufferTexture2D(target uint32, attachment uint32, textarget uint32, texture uint32, level int32) {
 	c.fnFramebufferTexture2D.Invoke(target, attachment, textarget, c.textures.get(texture), level)
+}
+
+// bindIfDefined binds a WebGL method that may not exist (WebGL 1); the result is undefined then.
+func bindIfDefined(v js.Value, name string) js.Value {
+	f := v.Get(name)
+	if !f.Truthy() {
+		return js.Undefined()
+	}
+	return f.Call("bind", v)
+}
+
+func (c *defaultContext) BlitFramebuffer(srcX0 int32, srcY0 int32, srcX1 int32, srcY1 int32, dstX0 int32, dstY0 int32, dstX1 int32, dstY1 int32, mask uint32, filter uint32) {
+	if c.fnBlitFramebuffer.IsUndefined() {
+		return
+	}
+	c.fnBlitFramebuffer.Invoke(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter)
 }
 
 func (c *defaultContext) GetError() uint32 {

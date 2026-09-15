@@ -32,6 +32,7 @@ type Image struct {
 	width       int
 	height      int
 	screen      bool
+	view        *view // a secondary window's screen texture (view_desktop.go); nil otherwise
 }
 
 // framebuffer is a wrapper of OpenGL's framebuffer.
@@ -46,6 +47,9 @@ func (i *Image) ID() graphicsdriver.ImageID {
 }
 
 func (i *Image) Dispose() {
+	if i.view != nil && i.view.screen == i {
+		i.view.screen = nil
+	}
 	if i.framebuffer != nil {
 		i.graphics.context.deleteFramebuffer(i.framebuffer.native)
 	}
@@ -77,10 +81,12 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 }
 
 func (i *Image) viewportSize() (int, int) {
-	if i.screen {
+	if i.screen || i.view != nil {
 		// The (default) framebuffer size can't be converted to a power of 2.
 		// On browsers, i.width and i.height are used as viewport size and
 		// Edge can't treat a bigger viewport than the drawing area (#71).
+		// A window's screen texture is drawn with the screen's projection too, so its viewport is the
+		// window's size, in the corner of the texture the blit takes.
 		return i.width, i.height
 	}
 	return graphics.InternalImageSize(i.width), graphics.InternalImageSize(i.height)

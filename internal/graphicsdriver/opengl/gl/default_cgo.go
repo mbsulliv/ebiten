@@ -251,6 +251,13 @@ package gl
 //   ((fn)(fnptr))(target, attachment, renderbuffertarget, renderbuffer);
 // }
 //
+// #cgo noescape glowBlitFramebuffer
+// #cgo nocallback glowBlitFramebuffer
+// static void glowBlitFramebuffer(uintptr_t fnptr, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+//   typedef void (*fn)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+//   ((fn)(fnptr))(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+// }
+//
 // #cgo noescape glowFramebufferTexture2D
 // #cgo nocallback glowFramebufferTexture2D
 // static void glowFramebufferTexture2D(uintptr_t fnptr, GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) {
@@ -572,6 +579,7 @@ type defaultContext struct {
 	gpFlush                    C.uintptr_t
 	gpFramebufferRenderbuffer  C.uintptr_t
 	gpFramebufferTexture2D     C.uintptr_t
+	gpBlitFramebuffer          C.uintptr_t
 	gpGenBuffers               C.uintptr_t
 	gpGenFramebuffers          C.uintptr_t
 	gpGenRenderbuffers         C.uintptr_t
@@ -810,6 +818,10 @@ func (c *defaultContext) FramebufferTexture2D(target uint32, attachment uint32, 
 	C.glowFramebufferTexture2D(c.gpFramebufferTexture2D, C.GLenum(target), C.GLenum(attachment), C.GLenum(textarget), C.GLuint(texture), C.GLint(level))
 }
 
+func (c *defaultContext) BlitFramebuffer(srcX0 int32, srcY0 int32, srcX1 int32, srcY1 int32, dstX0 int32, dstY0 int32, dstX1 int32, dstY1 int32, mask uint32, filter uint32) {
+	C.glowBlitFramebuffer(c.gpBlitFramebuffer, C.GLint(srcX0), C.GLint(srcY0), C.GLint(srcX1), C.GLint(srcY1), C.GLint(dstX0), C.GLint(dstY0), C.GLint(dstX1), C.GLint(dstY1), C.GLbitfield(mask), C.GLenum(filter))
+}
+
 func (c *defaultContext) GetError() uint32 {
 	ret := C.glowGetError(c.gpGetError)
 	return uint32(ret)
@@ -1030,6 +1042,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpFlush = C.uintptr_t(g.get("glFlush"))
 	c.gpFramebufferRenderbuffer = C.uintptr_t(g.get("glFramebufferRenderbuffer"))
 	c.gpFramebufferTexture2D = C.uintptr_t(g.get("glFramebufferTexture2D"))
+	c.gpBlitFramebuffer = C.uintptr_t(g.get("glBlitFramebuffer"))
 	c.gpGenBuffers = C.uintptr_t(g.get("glGenBuffers"))
 	c.gpGenFramebuffers = C.uintptr_t(g.get("glGenFramebuffers"))
 	c.gpGenRenderbuffers = C.uintptr_t(g.get("glGenRenderbuffers"))

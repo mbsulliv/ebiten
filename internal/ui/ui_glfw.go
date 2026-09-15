@@ -606,7 +606,18 @@ func (u *glfwBackend) createWindow() error {
 	ww, wh := u.desktopWindow.getInitWindowSizeInDIP()
 	s := monitor.DeviceScaleFactor()
 	width, height := windowSizeInGLFWPixels(ww, wh, s)
-	window, err := glfw.CreateWindow(width, height, "", nil, nil)
+	// A later window on OpenGL shares the primary window's context, so the one set of textures, buffers and
+	// programs serves every window (the driver presents into it by blitting). The other drivers' windows have
+	// no context to share.
+	var share *glfw.Window
+	if _, gl := u.ui.graphicsDriver.(interface {
+		NewPresenterView(opengl.Presenter) (graphicsdriver.ViewID, error)
+	}); gl {
+		if p := u.ui.primaryGLFW(); p != nil && p != u && p.created.Load() {
+			share = p.window
+		}
+	}
+	window, err := glfw.CreateWindow(width, height, "", nil, share)
 	if err != nil {
 		return err
 	}
@@ -1135,6 +1146,16 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 	}
 
 	switch g := u.ui.graphicsDriver.(type) {
+	case interface {
+		NewPresenterView(opengl.Presenter) (graphicsdriver.ViewID, error)
+	}:
+		// OpenGL: a view per window over the window's GL context (the first is the primary's, everything
+		// renders in it; the others are presented by blitting)
+		id, err := g.NewPresenterView(u.window)
+		if err != nil {
+			return err
+		}
+		u.viewID = id
 	case interface{ SetPresenter(opengl.Presenter) }:
 		g.SetPresenter(u.window)
 	case graphicsdriver.Viewer:

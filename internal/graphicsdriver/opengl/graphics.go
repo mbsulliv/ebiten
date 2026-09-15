@@ -18,6 +18,7 @@ package opengl
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -49,7 +50,14 @@ type Graphics struct {
 
 	nextImageID graphicsdriver.ImageID
 	images      map[graphicsdriver.ImageID]*Image
-	imageCount  atomic.Int64 // len(images), for ImageCount from any goroutine
+
+	// views are the windows presented into and view the current one (view_desktop.go); nil on platforms
+	// without windows, where the presenter alone presents.
+	views      map[graphicsdriver.ViewID]*view
+	view       *view
+	nextViewID graphicsdriver.ViewID
+	viewsMu    sync.Mutex
+	imageCount atomic.Int64 // len(images), for ImageCount from any goroutine
 
 	nextShaderID graphicsdriver.ShaderID
 	shaders      map[graphicsdriver.ShaderID]*Shader
@@ -99,6 +107,9 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	// The last uniforms must be reset before swapping the buffer (#2517).
 	if mode == graphicsdriver.FlushModePresent {
 		g.state.resetLastUniforms()
+		if v := g.secondaryView(); v != nil {
+			return g.presentView(v) // another window: its screen texture is blitted into it
+		}
 		if err := g.swapBuffers(); err != nil {
 			return err
 		}
@@ -157,6 +168,9 @@ func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
 }
 
 func (g *Graphics) NewScreenFramebufferImage(width, height int) (graphicsdriver.Image, error) {
+	if v := g.secondaryView(); v != nil {
+		return g.newViewScreenImage(v, width, height)
+	}
 	g.checkSize(width, height)
 	i := &Image{
 		id:       g.genNextImageID(),
