@@ -97,6 +97,11 @@ func CurrentWindow() *Window {
 	return &Window{id: id}
 }
 
+// DriverImageCount is the number of images alive in the graphics driver (textures: the atlas pages, every
+// unmanaged image, each window's screen and offscreen), or -1 when the driver does not count. A check that
+// closing a window frees its images: the count returns to what it was before the window opened.
+func DriverImageCount() int { return ui.Get().DriverImageCount() }
+
 // ID identifies the window for the life of the process.
 func (w *Window) ID() int { return w.id }
 

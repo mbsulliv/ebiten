@@ -18,6 +18,7 @@ package opengl
 
 import (
 	"fmt"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/hajimehoshi/ebiten/v2/internal/color"
@@ -48,6 +49,7 @@ type Graphics struct {
 
 	nextImageID graphicsdriver.ImageID
 	images      map[graphicsdriver.ImageID]*Image
+	imageCount  atomic.Int64 // len(images), for ImageCount from any goroutine
 
 	nextShaderID graphicsdriver.ShaderID
 	shaders      map[graphicsdriver.ShaderID]*Shader
@@ -175,11 +177,16 @@ func (g *Graphics) addImage(img *Image) {
 		panic(fmt.Sprintf("opengl: image ID %d was already registered", img.id))
 	}
 	g.images[img.id] = img
+	g.imageCount.Store(int64(len(g.images)))
 }
 
 func (g *Graphics) removeImage(img *Image) {
 	delete(g.images, img.id)
+	g.imageCount.Store(int64(len(g.images)))
 }
+
+// ImageCount is the number of live images (graphicsdriver.ImageCounter).
+func (g *Graphics) ImageCount() int { return int(g.imageCount.Load()) }
 
 func (g *Graphics) Initialize() error {
 	if err := g.makeContextCurrent(); err != nil {

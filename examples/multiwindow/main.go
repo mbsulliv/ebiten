@@ -98,8 +98,8 @@ func (g *game) Draw(screen *ebiten.Image) {
 			mods += " " + m.s
 		}
 	}
-	msg := fmt.Sprintf("window %d (id %d)\nticks %d  focused %v  last key %q  held:%s\ncursor %d,%d  screen %v\nN: open a window  Esc: close this one",
-		g.n, id, g.ticks, ebiten.IsFocused(), g.lastKey, mods, cx, cy, func() string { a, b := ebiten.ScreenSize(); return fmt.Sprintf("%dx%d", a, b) }())
+	msg := fmt.Sprintf("window %d (id %d)\nticks %d  focused %v  last key %q  held:%s\ncursor %d,%d  screen %v  driver images %d\nN: open a window  Esc: close this one",
+		g.n, id, g.ticks, ebiten.IsFocused(), g.lastKey, mods, cx, cy, func() string { a, b := ebiten.ScreenSize(); return fmt.Sprintf("%dx%d", a, b) }(), ebiten.DriverImageCount())
 	ebitenutil.DebugPrint(screen, msg)
 }
 

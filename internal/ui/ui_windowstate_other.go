@@ -34,6 +34,7 @@ func (u *UserInterface) OpenWindow(game Game, opts *WindowOptions) (int, error) 
 
 func (u *UserInterface) CloseWindow(id int)          {}
 func (u *UserInterface) FocusWindow(id int)          {}
+func (u *UserInterface) DriverImageCount() int       { return -1 }
 func (u *UserInterface) WithWindow(id int, f func()) { f() }
 func (u *UserInterface) IsWindowClosed(id int) bool  { return true }
 

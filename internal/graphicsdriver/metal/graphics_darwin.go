@@ -21,6 +21,7 @@ import (
 	"math"
 	"runtime"
 	"slices"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -45,6 +46,9 @@ type Graphics struct {
 	views      map[graphicsdriver.ViewID]*view
 	view       *view
 	nextViewID graphicsdriver.ViewID
+
+	// imageCount is len(images), kept as an atomic for ImageCount, which any goroutine may call.
+	imageCount atomic.Int64
 
 	// mainThreadRunner runs a function on the main thread synchronously (SetMainThreadRunner), handed to
 	// every view.
@@ -474,11 +478,16 @@ func (g *Graphics) addImage(img *Image) {
 		panic(fmt.Sprintf("metal: image ID %d was already registered", img.id))
 	}
 	g.images[img.id] = img
+	g.imageCount.Store(int64(len(g.images)))
 }
 
 func (g *Graphics) removeImage(img *Image) {
 	delete(g.images, img.id)
+	g.imageCount.Store(int64(len(g.images)))
 }
+
+// ImageCount is the number of live images (graphicsdriver.ImageCounter).
+func (g *Graphics) ImageCount() int { return int(g.imageCount.Load()) }
 
 func (g *Graphics) SetTransparent(transparent bool) {
 	g.transparent = transparent

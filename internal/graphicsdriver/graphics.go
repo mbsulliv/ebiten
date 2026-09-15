@@ -82,6 +82,12 @@ type Viewer interface {
 	ReleaseView(id ViewID)
 }
 
+// ImageCounter is implemented by a driver that can report how many of its images are alive: a check that a
+// closed window's screen and offscreen images were freed. Safe to call from any goroutine.
+type ImageCounter interface {
+	ImageCount() int
+}
+
 type Image interface {
 	ID() ImageID
 	Dispose()

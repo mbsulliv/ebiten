@@ -234,6 +234,20 @@ func (u *UserInterface) setPrimaryWindow(b *glfwBackend) {
 // closeWindow tears one window down while others live: its view on the render thread, its GLFW window on the
 // main thread (behind the closed flag, so a closure still queued against it returns), then the bookkeeping.
 func (u *UserInterface) closeWindow(b *glfwBackend) {
+	// The window's screen and offscreen images go first. This runs between frames, so the atlas defers the
+	// deallocation to the next BeginFrame, which is a remaining window's (there is one: the last window ends
+	// the loop instead); the empty event at the end makes sure that frame comes soon even when the rest are
+	// idle. The screen image's driver-side Dispose does not touch its view, which is released below.
+	if b.context != nil {
+		if b.context.screen != nil {
+			b.context.screen.Deallocate()
+			b.context.screen = nil
+		}
+		if b.context.offscreen != nil {
+			b.context.offscreen.Deallocate()
+			b.context.offscreen = nil
+		}
+	}
 	graphicscommand.ReleaseView(u.graphicsDriver, b.viewID)
 	var wasFocused bool
 	u.mainThread.Call(func() {
@@ -263,6 +277,15 @@ func (u *UserInterface) closeWindow(b *glfwBackend) {
 			}
 		})
 	}
+	_ = glfw.PostEmptyEvent() // a frame for the rest, which runs the deferred deallocation
+}
+
+// DriverImageCount is the number of images alive in the graphics driver, or -1 when the driver does not count.
+func (u *UserInterface) DriverImageCount() int {
+	if c, ok := u.graphicsDriver.(graphicsdriver.ImageCounter); ok {
+		return c.ImageCount()
+	}
+	return -1
 }
 
 // addWindow and removeWindow keep the list of the GLFW backend's windows; snapshotWindows copies it.
