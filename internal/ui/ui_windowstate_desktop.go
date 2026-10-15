@@ -256,7 +256,14 @@ func (u *UserInterface) closeWindow(b *glfwBackend) {
 			if a, err := b.window.GetAttrib(glfw.Focused); err == nil {
 				wasFocused = a == glfw.True
 			}
-			_ = b.window.Destroy()
+			if b.ownsContext {
+				// the context every other window renders in goes on (the windows share its textures and
+				// programs, and the driver draws in it): the window only hides, destroyed with the rest at
+				// termination (glfw.Terminate)
+				_ = b.window.Hide()
+			} else {
+				_ = b.window.Destroy()
+			}
 		}
 	})
 	u.removeWindow(b)

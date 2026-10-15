@@ -143,6 +143,10 @@ type glfwBackend struct {
 	// for a driver that does not.
 	viewID graphicsdriver.ViewID
 
+	// ownsContext is set for the window whose OpenGL context every window renders in (the first one made): closed
+	// while others live, it is hidden rather than destroyed (closeWindow), the context going on for the rest.
+	ownsContext bool
+
 	input         glfwInput
 	backendWindow glfwWindow
 
@@ -1156,6 +1160,11 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 			return err
 		}
 		u.viewID = id
+		if o, ok := g.(interface {
+			OwnsContext(graphicsdriver.ViewID) bool
+		}); ok {
+			u.ownsContext = o.OwnsContext(id)
+		}
 	case interface{ SetPresenter(opengl.Presenter) }:
 		g.SetPresenter(u.window)
 	case graphicsdriver.Viewer:

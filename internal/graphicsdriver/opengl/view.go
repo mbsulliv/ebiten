@@ -28,7 +28,8 @@ import (
 // image is therefore not the default framebuffer but an ordinary texture, drawn like any offscreen; presenting
 // it makes the window's own context current, blits the texture to that context's default framebuffer through a
 // framebuffer object made there, swaps the window's buffers and makes the primary context current again. One
-// context switch pair per presented frame, and the single-window path is untouched.
+// context switch pair per presented frame, and the single-window path is untouched. The primary window holds that
+// context, so it must outlive the rest: closed while others are open, it is hidden, not destroyed (OwnsContext).
 
 // view is one window the driver presents into.
 type view struct {

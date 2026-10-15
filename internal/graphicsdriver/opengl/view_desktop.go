@@ -43,6 +43,17 @@ func (g *Graphics) NewPresenterView(p Presenter) (graphicsdriver.ViewID, error) 
 	return v.id, nil
 }
 
+// OwnsContext reports whether the view's window holds the context everything renders in (the primary's: the first
+// window made). That window must outlive the others: the windows the driver blits into share its context's
+// textures, buffers and programs, and rendering goes on in it, so destroying it with others still open would take
+// their frames with it. The UI hides it instead and destroys it with the rest at termination.
+func (g *Graphics) OwnsContext(id graphicsdriver.ViewID) bool {
+	g.viewsMu.Lock()
+	defer g.viewsMu.Unlock()
+	v := g.views[id]
+	return v != nil && v.primary
+}
+
 // NewView is the Viewer's constructor from a native window; OpenGL needs the window's context instead
 // (NewPresenterView).
 func (g *Graphics) NewView(nativeWindow uintptr) (graphicsdriver.ViewID, error) {
