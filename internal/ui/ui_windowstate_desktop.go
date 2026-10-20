@@ -274,13 +274,22 @@ func (u *UserInterface) closeWindow(b *glfwBackend) {
 	if u.primaryGLFW() == b && len(ws) > 0 {
 		u.setPrimaryWindow(ws[0])
 	}
-	// The focus went with the window; hand it to the newest of the rest, so the keyboard keeps working
-	// without a click.
+	// The focus went with the window; hand it to the newest of the rest that is on screen, so the keyboard keeps
+	// working without a click. A hidden window is passed over: focusing it would show it (on macOS, Focus is
+	// makeKeyAndOrderFront), and a window opened hidden is meant to stay so (vio's keeper, which keeps the loop
+	// running once the last document window closes).
 	if wasFocused && len(ws) > 0 {
-		next := ws[len(ws)-1]
 		u.mainThread.Call(func() {
-			if next.created.Load() && !next.closed.Load() {
+			for i := len(ws) - 1; i >= 0; i-- {
+				next := ws[i]
+				if !next.created.Load() || next.closed.Load() {
+					continue
+				}
+				if v, err := next.window.GetAttrib(glfw.Visible); err != nil || v != glfw.True {
+					continue
+				}
 				_ = next.window.Focus()
+				return
 			}
 		})
 	}
